@@ -18,6 +18,7 @@ pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
 
 pub mod a11y;
 pub mod agent;
+pub mod agent_credentials;
 pub mod agent_host;
 /// The browser Agent host: one local future per turn, driven by the page's event loop.
 #[cfg(target_arch = "wasm32")]
@@ -476,6 +477,11 @@ pub struct UiState {
     pub agent_transcript: figcraft_agent::history::Transcript,
     /// The file `agent_transcript` was read from, so a tab switch reloads it and a frame does not.
     pub agent_transcript_uid: Option<u64>,
+    /// The browser's session key store.
+    ///
+    /// Present on every platform so the panel has one shape; only the browser writes to it, because
+    /// only the browser has no environment to read. It is never serialized.
+    pub agent_credentials: agent_credentials::AgentCredentials,
     /// Requests the Agent panel produced this frame, for the app to perform after the draw.
     pub agent_requests: Vec<agent::Request>,
     /// The platform's way to run a turn. `None` until the app sets one, so a build without a runtime
@@ -698,6 +704,7 @@ impl Default for UiState {
             agent_configured: false,
             agent_transcript: figcraft_agent::history::Transcript::default(),
             agent_transcript_uid: None,
+            agent_credentials: agent_credentials::AgentCredentials::default(),
             agent_requests: Vec::new(),
             agent_host: None,
             agent_turn: 0,

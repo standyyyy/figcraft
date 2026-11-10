@@ -319,6 +319,44 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
                 });
                 crate::widgets::label(ui, tr("The name of the variable holding the key, not the key."), t.text_secondary);
             }
+            // A browser has no environment to read, so the key is typed here and kept in memory only.
+            // The value never reaches `pref.agent`: preferences are saved as text, so a key in them
+            // would be a key on disk. Only the reserved reference is persisted.
+            if cfg!(target_arch = "wasm32") {
+                let held = app.ui.agent_credentials.draft().unwrap_or_default();
+                ui.horizontal(|ui| {
+                    ui.label(tr("API key for this browser session"));
+                    if let Some(typed) = crate::widgets::secret_field_named(
+                        ui,
+                        egui::Id::unique("pref_agent_key"),
+                        &held,
+                        220.0,
+                        tr("API key for this browser session"),
+                    ) {
+                        app.ui.agent_credentials.set_draft(typed);
+                    }
+                    if crate::widgets::button(ui, tr("Use this key"), false, !held.trim().is_empty()).clicked() {
+                        app.ui.agent_credentials.commit_draft();
+                    }
+                    if crate::widgets::button(ui, tr("Forget"), false, app.ui.agent_credentials.is_set()).clicked() {
+                        app.ui.agent_credentials.clear_session_key();
+                    }
+                });
+                // The reference follows the store, so the config names the session key only when one
+                // is actually held.
+                let wanted = if app.ui.agent_credentials.is_set() { Some(figcraft_agent::SESSION_REFERENCE.to_string()) } else { None };
+                if wanted != agent.credential {
+                    provider["credential"] = match &wanted {
+                        Some(r) => json!(r),
+                        None => json!(""),
+                    };
+                }
+                crate::widgets::label(
+                    ui,
+                    tr("Held for this session only: a reload keeps the endpoint and model and asks for the key again."),
+                    t.text_secondary,
+                );
+            }
             if !provider.as_object().is_some_and(|o| o.is_empty()) {
                 app.run("pref.agent", provider);
             }

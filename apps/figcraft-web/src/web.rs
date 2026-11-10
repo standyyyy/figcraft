@@ -76,7 +76,11 @@ pub fn start() {
                     // The browser's Agent runtime: one local future per turn, advanced by the page's
                     // event loop. The same turn code the desktop runs, driven without blocking the
                     // only thread there is.
-                    fig.ui.agent_host = Some(Box::new(figcraft_ui_egui::agent_local::LocalFutureHost::new()));
+                    // One credential store for the session: Preferences writes the key into it, and
+                    // the host resolves through it, so the two cannot disagree about what is held.
+                    let agent_credentials = figcraft_ui_egui::agent_credentials::AgentCredentials::default();
+                    fig.ui.agent_credentials = agent_credentials.clone();
+                    fig.ui.agent_host = Some(Box::new(figcraft_ui_egui::agent_local::LocalFutureHost::new(agent_credentials.resolver())));
                     fig.note_recovered(recovered);
                     if let Err(e) = crate::pasted::install(cc.egui_ctx.clone()) {
                         log::error!("couldn't listen for pasted images: {e:?}");

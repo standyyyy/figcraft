@@ -53,18 +53,14 @@ fn push(shared: &Rc<RefCell<Shared>>, message: HostMessage) {
 pub struct LocalFutureHost {
     shared: Rc<RefCell<Shared>>,
     cancel: Option<CancelToken>,
-}
-
-impl Default for LocalFutureHost {
-    fn default() -> Self {
-        Self::new()
-    }
+    /// Where the session key lives: this store, and nowhere else.
+    credentials: crate::agent_credentials::SessionResolver,
 }
 
 impl LocalFutureHost {
-    /// A host with no turn running.
-    pub fn new() -> Self {
-        Self { shared: Rc::new(RefCell::new(Shared::default())), cancel: None }
+    /// A host with no turn running, resolving keys through `credentials`.
+    pub fn new(credentials: crate::agent_credentials::SessionResolver) -> Self {
+        Self { shared: Rc::new(RefCell::new(Shared::default())), cancel: None, credentials }
     }
 }
 
@@ -80,7 +76,7 @@ impl AgentHost for LocalFutureHost {
             }
             HostRequest::Start(req) => {
                 let cancel = CancelToken::new();
-                let orchestrator = Orchestrator::from_request(*req, cancel.clone());
+                let orchestrator = Orchestrator::from_request(*req, cancel.clone(), &self.credentials);
                 self.cancel = Some(cancel.clone());
                 if let Ok(mut shared) = self.shared.try_borrow_mut() {
                     shared.running = true;
@@ -138,10 +134,10 @@ struct Orchestrator {
 
 impl Orchestrator {
     /// Build the driver for a request: a shadow from the snapshot, then the turn.
-    fn from_request(req: TurnRequest, _cancel: CancelToken) -> Self {
+    fn from_request(req: TurnRequest, _cancel: CancelToken, credentials: &crate::agent_credentials::SessionResolver) -> Self {
         // The snapshot is the document as JSON: the driver's tools run against a shadow built from it,
         // never against the live document, which the UI thread owns.
-        Self { driver: build_driver(req) }
+        Self { driver: build_driver(req, credentials) }
     }
 
     /// Drive the turn to its end, handing events over as they are produced.
@@ -170,7 +166,7 @@ impl Orchestrator {
 }
 
 /// Build a driver from a request, or a finished driver that reports why it could not start.
-fn build_driver(req: TurnRequest) -> TurnDriver {
+fn build_driver(req: TurnRequest, credentials: &crate::agent_credentials::SessionResolver) -> TurnDriver {
     let turn_no = req.turn;
     let (session, failure) = match crate::agent_host::shadow_session_from_snapshot(&req.snapshot) {
         Ok(s) => (s, None),
@@ -201,7 +197,7 @@ fn build_driver(req: TurnRequest) -> TurnDriver {
         cancel: req.cancel,
         history: req.history,
     };
-    TurnDriver::start(turn, shadow, &figcraft_agent::EnvironmentCredentials)
+    TurnDriver::start(turn, shadow, credentials)
 }
 
 #[cfg(test)]
@@ -210,14 +206,14 @@ mod tests {
 
     #[test]
     fn a_host_with_no_turn_is_idle_and_says_what_it_is() {
-        let host = LocalFutureHost::new();
+        let host = LocalFutureHost::new(crate::agent_credentials::AgentCredentials::default().resolver());
         assert_eq!(host.status(), HostStatus::Idle);
         assert_eq!(host.describe(), "browser local future");
     }
 
     #[test]
     fn draining_an_idle_host_reports_nothing() {
-        let mut host = LocalFutureHost::new();
+        let mut host = LocalFutureHost::new(crate::agent_credentials::AgentCredentials::default().resolver());
         assert!(host.drain().is_empty());
         assert!(host.take_terminal().is_none());
     }

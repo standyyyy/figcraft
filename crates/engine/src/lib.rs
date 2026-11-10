@@ -103,7 +103,7 @@ use serde_json::{Value, json};
 mod derived;
 mod doc_state;
 mod error;
-mod prefs;
+pub mod prefs;
 mod session;
 mod view_state;
 
@@ -482,6 +482,8 @@ mod place_crosshair_tests;
 mod placed_image_size_tests;
 #[cfg(test)]
 mod playground_tests;
+#[cfg(test)]
+mod prefs_tests;
 #[cfg(test)]
 mod plugin_data_tests;
 #[cfg(test)]

@@ -120,6 +120,64 @@ pub struct Prefs {
     /// for updates by themselves. A file naming another one doesn't contact its server (#1097).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub team_libraries: Vec<String>,
+    /// The in-app Agent's provider settings. Plain data only: this crate never depends on
+    /// `figcraft-agent`, so it cannot leak Rig types into preferences.
+    #[serde(default, skip_serializing_if = "AgentPrefs::is_default")]
+    pub agent: AgentPrefs,
+}
+
+/// The endpoint and model the in-app Agent talks to.
+///
+/// No credential is stored here in plain form: [`credential`](Self::credential) holds a reference
+/// the credential store resolves (an environment variable name), never the secret itself, so a
+/// preferences file that gets copied or committed cannot leak it. The `Debug` impl redacts even
+/// that, so a log line cannot either.
+#[derive(Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AgentPrefs {
+    /// Whether the Agent panel is offered at all.
+    pub enabled: bool,
+    /// The OpenAI-compatible base URL, e.g. `http://127.0.0.1:8000/v1`.
+    pub base_url: String,
+    /// The model name. Opaque to us: a server may answer under an alias.
+    pub model: String,
+    /// The name of the environment variable (or credential-store key) holding the API key. `None`:
+    /// the endpoint needs none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credential: Option<String>,
+    /// Which route to call. `chatCompletions` until another route is supported.
+    pub route: String,
+    /// How long one model request may take, in seconds.
+    pub timeout_seconds: u32,
+}
+
+/// The default route the gateway calls.
+pub const DEFAULT_AGENT_ROUTE: &str = "chatCompletions";
+/// How long a request may take unless configured otherwise.
+pub const DEFAULT_AGENT_TIMEOUT_SECONDS: u32 = 120;
+/// The shortest and longest accepted timeout.
+pub const AGENT_TIMEOUT_MIN: u32 = 5;
+pub const AGENT_TIMEOUT_MAX: u32 = 600;
+
+impl AgentPrefs {
+    /// Whether these are the defaults (nothing to write).
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+impl std::fmt::Debug for AgentPrefs {
+    /// Redacts the credential reference and never prints a secret, so `{:?}` in a log is safe.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentPrefs")
+            .field("enabled", &self.enabled)
+            .field("base_url", &self.base_url)
+            .field("model", &self.model)
+            .field("credential", &self.credential.as_ref().map(|_| "<redacted>"))
+            .field("route", &self.route)
+            .field("timeout_seconds", &self.timeout_seconds)
+            .finish()
+    }
 }
 
 /// Recently run actions kept for the Actions palette (newest first).
@@ -161,6 +219,7 @@ impl Default for Prefs {
             board_grid: Default::default(),
             recent_actions: Vec::new(),
             team_libraries: Vec::new(),
+            agent: AgentPrefs::default(),
         }
     }
 }

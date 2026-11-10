@@ -51,14 +51,6 @@ fn list_of(p: &Value, key: &str) -> std::result::Result<Vec<String>, String> {
     Ok(out)
 }
 
-fn priority_of(p: &Value, key: &str) -> std::result::Result<Priority, String> {
-    let Some(v) = get(p, key) else { return Ok(Priority::default()) };
-    let Some(s) = v.as_str() else {
-        return Err(format!("`{key}` must be a priority name (must, should, could, wont)"));
-    };
-    Priority::parse(s).ok_or_else(|| format!("`{key}` is not a priority: `{s}` (must, should, could, wont)"))
-}
-
 /// The requirements from a `requirements` array (a whole document's worth or one requirement).
 fn requirements_of(p: &Value) -> std::result::Result<Vec<Requirement>, String> {
     let Some(v) = get(p, "requirements") else { return Ok(Vec::new()) };

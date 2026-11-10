@@ -197,3 +197,12 @@ fn the_runnable_kinds_say_whether_a_retry_could_help() {
     assert!(!AgentErrorKind::Conflict.is_retryable());
     assert!(!AgentErrorKind::Cancelled.is_retryable());
 }
+
+#[test]
+fn the_url_is_the_normalized_base_plus_the_route() {
+    // Kept from the removed custom transport: it tests `AgentConfig`, not the wire, so it still holds.
+    // Rig builds the request from `base_url()` + `route().path()`.
+    let c = AgentConfig::from_prefs(&prefs("http://127.0.0.1:8000/v1/", "m")).expect("valid");
+    assert_eq!(c.base_url(), "http://127.0.0.1:8000/v1");
+    assert_eq!(format!("{}/{}", c.base_url(), c.route().path()), "http://127.0.0.1:8000/v1/chat/completions");
+}

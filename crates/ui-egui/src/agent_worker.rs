@@ -13,7 +13,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 
 use figcraft_agent::run::{AgentEvent, CancelToken, Limits};
-use figcraft_agent::{AgentConfig, AgentErrorKind, ModelGateway};
+use figcraft_agent::{AgentConfig, AgentErrorKind};
 
 use crate::agent_host::{AgentHost, HostRequest, HostStatus, Snapshot};
 
@@ -203,8 +203,9 @@ fn worker_loop(rx: Receiver<Job>, events: Arc<Mutex<Vec<AgentEvent>>>, terminal:
 
 /// Run one turn on the worker thread.
 ///
-/// The shadow is built from the snapshot, so the worker never needs the live `Session`. A cancelled,
-/// failed or stale turn records no replay, which is what keeps the document untouched.
+/// The shadow is built from the snapshot, so the worker never needs the live `Session`. The runtime
+/// returns one `TurnTerminal`; only its success variant can carry a replay, which is what keeps a
+/// failed, cancelled or limited turn from touching the document.
 fn run_turn(
     turn: u64,
     request: &str,
@@ -215,66 +216,52 @@ fn run_turn(
     events: &Arc<Mutex<Vec<AgentEvent>>>,
     terminal_slot: &Arc<Mutex<Option<figcraft_agent::TurnTerminal>>>,
 ) {
-    push_event(events, AgentEvent::Started { turn });
-
-    // The model, built here on the worker thread: the credential is read, used and dropped here.
-    let gateway = match ModelGateway::build(config, &figcraft_agent::Environment) {
-        Ok(g) => g,
-        Err(e) => {
-            push_event(events, AgentEvent::Failed { turn, kind: e.kind, message: e.message });
-            return;
-        }
-    };
-    let _ = gateway;
-
-    // Build the shadow from the snapshot JSON. A document that does not parse is a configuration
-    // problem the user can act on, not a crash.
+    // The shadow first: a document that does not parse is a configuration problem the user can act
+    // on, not a crash.
     let session = match shadow_from_snapshot(snapshot) {
         Ok(s) => s,
         Err(message) => {
-            push_event(events, AgentEvent::Failed { turn, kind: AgentErrorKind::Configuration, message });
+            let terminal = figcraft_agent::TurnTerminal::Failed { turn, kind: AgentErrorKind::Configuration, message };
+            push_event(
+                events,
+                AgentEvent::Failed { turn, kind: AgentErrorKind::Configuration, message: "the document snapshot could not be read".into() },
+            );
+            if let Ok(mut slot) = terminal_slot.lock() {
+                *slot = Some(terminal);
+            }
             return;
         }
     };
-    // The shadow owns the copy; tools run against it, never against the live document.
     let shadow = match figcraft_agent::shadow::Shadow::capture(&session) {
         Ok(s) => s,
         Err(e) => {
-            push_event(events, AgentEvent::Failed { turn, kind: e.kind, message: e.message });
+            push_event(events, AgentEvent::Failed { turn, kind: e.kind, message: e.message.clone() });
+            if let Ok(mut slot) = terminal_slot.lock() {
+                *slot = Some(figcraft_agent::TurnTerminal::Failed { turn, kind: e.kind, message: e.message });
+            }
             return;
         }
     };
-    let tools = figcraft_agent::tools::ShadowTools::new(shadow, figcraft_agent_tools::ToolPolicy::EmbeddedAgent);
 
-    if cancel.is_cancelled() {
-        push_event(events, AgentEvent::Cancelled { turn });
-        return;
-    }
-
-    // Drive the turn: ask the model, run the tools it asks for, repeat until it answers or a limit
-    // stops it. The loop lives here rather than in the panel so the UI thread never blocks.
+    // The credential is resolved on this thread and dropped with the agent: it never reaches the UI.
     let credential = credential_for(config);
-    let transport = figcraft_agent::transport::Transport::new(config.timeout_seconds());
     let mut emit = |event: AgentEvent| push_event(events, event);
-    let end = figcraft_agent::transport::run_turn(config, credential.as_deref(), &transport, &tools, turn, request, limits, cancel, &mut emit);
+    let terminal = figcraft_agent::runtime::run(
+        figcraft_agent::runtime::Turn {
+            turn,
+            request: request.to_string(),
+            document_uid: snapshot.uid,
+            base_revision: snapshot.revision,
+            config: config.clone(),
+            limits: *limits,
+            cancel: cancel.clone(),
+        },
+        shadow,
+        credential.as_deref(),
+        &mut emit,
+    );
 
-    // One value says how the turn ended, and only its success variant can hold an edit. The shadow is
-    // consumed on every path: applying the commands is only ever reachable from `Succeeded`.
-    let terminal = match end {
-        figcraft_agent::transport::TurnEnd::Answered(answer) => finish_success(tools, turn, snapshot, request, answer),
-        figcraft_agent::transport::TurnEnd::Cancelled => {
-            drop(tools);
-            figcraft_agent::TurnTerminal::Cancelled { turn }
-        }
-        figcraft_agent::transport::TurnEnd::Stopped(kind, message) => {
-            // A turn cut short by a limit or a timeout is not a finished turn: its edits are dropped,
-            // because applying half a screen would leave a document nobody agreed to. The message says
-            // which limit stopped it.
-            drop(tools);
-            figcraft_agent::TurnTerminal::LimitReached { turn, kind, message }
-        }
-    };
-    // The panel learns how it ended from the terminal event; the replay travels inside the success.
+    // The panel learns how it ended from the event; the replay travels inside the terminal.
     match &terminal {
         figcraft_agent::TurnTerminal::Success { .. } => {
             push_event(events, AgentEvent::Committed { turn, undo_label: figcraft_agent::shadow::undo_label(request) })
@@ -292,31 +279,6 @@ fn run_turn(
     }
 }
 
-/// Build the success terminal, moving the shadow's replay into the envelope.
-///
-/// This is the only function that reads a shadow's replay for committing, and it is only called when
-/// the model answered.
-fn finish_success(
-    tools: figcraft_agent::tools::ShadowTools,
-    turn: u64,
-    snapshot: &Snapshot,
-    request: &str,
-    answer: String,
-) -> figcraft_agent::TurnTerminal {
-    let replay = tools.into_shadow().map(|sh| sh.replay().to_vec()).unwrap_or_default();
-    let commit = if replay.is_empty() {
-        None
-    } else {
-        Some(figcraft_agent::CommitEnvelope::new(turn, snapshot.uid, snapshot.revision, replay, figcraft_agent::shadow::undo_label(request)))
-    };
-    figcraft_agent::TurnTerminal::Success { turn, answer, commit }
-}
-
-/// The credential a turn may use, resolved from the environment by the name in the config.
-fn credential_for(config: &AgentConfig) -> Option<String> {
-    config.credential().and_then(|name| std::env::var(name).ok()).filter(|v| !v.is_empty())
-}
-
 /// Build a shadow `Session` from a snapshot's document JSON.
 fn shadow_from_snapshot(snapshot: &Snapshot) -> Result<figcraft_engine::Session, String> {
     // The snapshot is what `inspect_document` reported; a document round-trips through the same JSON
@@ -332,4 +294,12 @@ fn push_event(events: &Arc<Mutex<Vec<AgentEvent>>>, event: AgentEvent) {
     if let Ok(mut e) = events.lock() {
         e.push(event);
     }
+}
+
+/// The credential a turn may use, resolved from the environment by the name in the config.
+///
+/// Read on the worker thread, handed to the runtime, and dropped when the turn ends: it never
+/// reaches the UI thread, a panel, or a transcript.
+fn credential_for(config: &AgentConfig) -> Option<String> {
+    config.credential().and_then(|name| std::env::var(name).ok()).filter(|v| !v.is_empty())
 }

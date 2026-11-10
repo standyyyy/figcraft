@@ -15,6 +15,9 @@ figcraft-doc = { workspace = true }
 figcraft-format = { workspace = true }
 rig-agent = { workspace = true }
 rig-core = { workspace = true }
+# Driving Rig's streaming stream from a blocking worker thread. Already in the graph through
+# Rig and ureq; declared here because the code polls it directly.
+futures = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }

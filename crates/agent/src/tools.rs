@@ -20,7 +20,12 @@ use crate::shadow::Shadow;
 /// principle; a turn runs its tools one after another, so the lock is never contended in practice.
 #[derive(Clone)]
 pub struct ShadowTools {
-    shadow: Arc<Mutex<Shadow>>,
+    /// The shadow, in a slot so it can be taken out when the turn ends.
+    ///
+    /// A plain `Arc<Mutex<Shadow>>` could not be unwrapped after the turn: every Rig tool holds a
+    /// clone of this handle for as long as the agent lives, so the reference count is never one.
+    /// Taking it out of a slot works regardless of how many handles remain.
+    shadow: Arc<Mutex<Option<Shadow>>>,
     policy: ToolPolicy,
 }
 
@@ -33,13 +38,16 @@ impl std::fmt::Debug for ShadowTools {
 impl ShadowTools {
     /// Wrap `shadow` so tools run against it under `policy`.
     pub fn new(shadow: Shadow, policy: ToolPolicy) -> Self {
-        Self { shadow: Arc::new(Mutex::new(shadow)), policy }
+        Self { shadow: Arc::new(Mutex::new(Some(shadow))), policy }
     }
 
     /// Run one catalog tool against the shadow, with the lock held for that call only.
     pub fn call(&self, name: &str, args: &Value) -> ToolResult {
         match self.shadow.lock() {
-            Ok(mut sh) => sh.call(self.policy, name, args),
+            Ok(mut slot) => match slot.as_mut() {
+                Some(sh) => sh.call(self.policy, name, args),
+                None => ToolResult::error("the Agent's working document is no longer available"),
+            },
             // A poisoned lock means a tool panicked; the engine's guards turn that into an error the
             // model can read rather than taking the app down.
             Err(_) => ToolResult::error("the Agent's working document is unavailable after an earlier failure"),
@@ -48,13 +56,19 @@ impl ShadowTools {
 
     /// The replay steps the turn recorded so far.
     pub fn replay_len(&self) -> usize {
-        self.shadow.lock().map(|sh| sh.replay().len()).unwrap_or(0)
+        self.shadow.lock().map(|slot| slot.as_ref().map_or(0, |sh| sh.replay().len())).unwrap_or(0)
     }
 
     /// The shadow, once the turn is over and no tool can run.
+    /// Take the shadow out, once, when the turn is over.
+    ///
+    /// This is the only way a turn's replay leaves the tools: a failed, cancelled or limited turn
+    /// simply drops the handle without calling it, and the shadow goes with it.
     pub fn into_shadow(self) -> Option<Shadow> {
-        // A poisoned lock still holds the shadow: the turn is over, so recovering it is safe.
-        Arc::try_unwrap(self.shadow).ok().map(|m| m.into_inner().unwrap_or_else(std::sync::PoisonError::into_inner))
+        match self.shadow.lock() {
+            Ok(mut slot) => slot.take(),
+            Err(poisoned) => poisoned.into_inner().take(),
+        }
     }
 
     /// Every tool Rig should advertise, in catalog order.

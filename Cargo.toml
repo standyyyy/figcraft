@@ -44,6 +44,8 @@ rig-core = { version = "=0.44.0", default-features = false, features = ["reqwest
 # The blocking HTTP client the model transport uses. FigCraft already ships it (craft-font-store
 # downloads fonts with it), so the Agent adds no new HTTP stack: one client, one TLS story.
 ureq = { version = "3.5", default-features = false, features = ["rustls", "gzip"] }
+# Polling Rig's agent stream from a blocking thread (the stream is a futures 0.3 Stream).
+futures = { version = "0.3", default-features = false, features = ["std", "executor"] }
 
 # Keep coupled craft-libs crates on one rev. craft-update has no sibling-crate
 # dependencies and is pinned separately for the suite updater rollout.

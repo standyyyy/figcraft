@@ -1,4 +1,6 @@
-//! The live acceptance test against a reachable OpenAI-compatible endpoint.
+#![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+//! The live acceptance test against a reachable OpenAI-compatible endpoint, through Rig's streaming
+//! runtime -- the same path the app uses, not a side door.
 //!
 //! Opt-in, so the deterministic suite never touches the network:
 //!
@@ -9,12 +11,15 @@
 //! ```
 //!
 //! A credential, when the endpoint needs one, is named by `FIGCRAFT_AI_API_KEY_NAME` and read from
-//! that variable: no key is committed, and none is printed. A local vLLM usually needs none.
+//! that variable: no key is committed, and none is printed.
 //!
 //! Without the variables the test says it skipped and returns, so a stray `--ignored` is harmless.
 
 use figcraft_agent::AgentConfig;
-use figcraft_agent::transport::{Transport, request_body, wire_tools};
+use figcraft_agent::TurnTerminal;
+use figcraft_agent::run::{AgentEvent, CancelToken, Limits};
+use figcraft_agent::runtime::{Turn, run};
+use figcraft_agent::shadow::Shadow;
 use serde_json::json;
 
 /// The endpoint and model from the environment, or `None` when not configured.
@@ -28,111 +33,105 @@ fn live_config() -> Option<(AgentConfig, Option<String>)> {
         base_url: base,
         model,
         credential: key_name,
+        timeout_seconds: 120,
         ..figcraft_engine::prefs::AgentPrefs::default()
     };
     let config = AgentConfig::from_prefs(&prefs).ok()?;
     Some((config, credential))
 }
 
+/// A disposable synthetic document, as a shadow the turn edits.
+fn shadow() -> Shadow {
+    let mut s = figcraft_engine::Session::new();
+    s.execute("file.new", &json!({})).expect("file.new");
+    Shadow::capture(&s).expect("capture")
+}
+
+fn turn(config: AgentConfig, request: &str, cancel: CancelToken) -> Turn {
+    Turn { turn: 1, request: request.into(), document_uid: 1, base_revision: 1, config, limits: Limits::default(), cancel }
+}
+
 #[test]
 #[ignore = "needs FIGCRAFT_AI_BASE_URL and FIGCRAFT_AI_MODEL; set them to run against a real endpoint"]
-fn a_text_completion_answers_and_the_model_alias_is_accepted() {
+fn a_streamed_answer_arrives_through_rig() {
     let Some((config, credential)) = live_config() else {
         eprintln!("skipped: set FIGCRAFT_AI_BASE_URL and FIGCRAFT_AI_MODEL to run this");
         return;
     };
-    let transport = Transport::new(120);
-    let messages = vec![json!({"role": "user", "content": "Reply with exactly: OK"})];
-    let body = request_body(&config, &messages, &[], false);
-    let m = transport.complete(&config, credential.as_deref(), &body).expect("the endpoint answers");
-    assert!(!m.text.is_empty(), "an answer came back");
-    println!("live: {:?} (configured `{}`, answered as {:?})", m.text.chars().take(80).collect::<String>(), config.model(), m.model);
-    // Whatever alias the server returned, nothing rejected it: the model name is opaque.
-    if let Some(returned) = &m.model {
-        assert!(!returned.is_empty(), "the returned model name is a name");
+    let mut events = Vec::new();
+    let terminal = run(turn(config.clone(), "Reply with exactly: OK", CancelToken::new()), shadow(), credential.as_deref(), &mut |e| events.push(e));
+
+    // Rig streams: the answer must arrive as one or more deltas, not only in the final response.
+    let deltas: Vec<&str> = events
+        .iter()
+        .filter_map(|e| match e {
+            AgentEvent::TextDelta { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(!deltas.is_empty(), "no streamed text arrived; events were {events:?}");
+    println!("live: {} text deltas, first {:?}", deltas.len(), deltas.first());
+
+    match terminal {
+        TurnTerminal::Success { answer, .. } => {
+            println!("live: answer {:?}", answer.chars().take(80).collect::<String>());
+            assert!(!answer.is_empty(), "a success has an answer");
+        }
+        other => panic!("expected a success, got {other:?}"),
     }
 }
 
 #[test]
 #[ignore = "needs FIGCRAFT_AI_BASE_URL and FIGCRAFT_AI_MODEL; set them to run against a real endpoint"]
-fn a_model_calls_the_canvas_tool_it_is_given() {
+fn a_model_calls_the_canvas_tool_and_the_edit_replays() {
     let Some((config, credential)) = live_config() else {
         eprintln!("skipped: set FIGCRAFT_AI_BASE_URL and FIGCRAFT_AI_MODEL to run this");
         return;
     };
-    let transport = Transport::new(120);
-    let definitions = vec![json!({
-        "name": "create_node",
-        "description": "Create a design layer on the canvas",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "type": {"type": "string", "description": "rectangle, ellipse, frame or text"},
-                "x": {"type": "number", "description": "left"},
-                "y": {"type": "number", "description": "top"},
-                "width": {"type": "number"},
-                "height": {"type": "number"}
-            },
-            "required": ["type"]
+    let mut events = Vec::new();
+    let terminal = run(
+        turn(config, "Create a rectangle 100 wide and 60 tall at 10,10 in the design.", CancelToken::new()),
+        shadow(),
+        credential.as_deref(),
+        &mut |e| events.push(e),
+    );
+
+    let tools: Vec<&str> = events
+        .iter()
+        .filter_map(|e| match e {
+            AgentEvent::ToolStarted { name, .. } => Some(name.as_str()),
+            _ => None,
+        })
+        .collect();
+    println!("live: tools started: {tools:?}");
+    assert!(!tools.is_empty(), "the model called no tool; events were {events:?}");
+
+    match terminal {
+        TurnTerminal::Success { commit, .. } => {
+            let envelope = commit.expect("a turn that created a layer carries a replay");
+            let commands: Vec<&str> = envelope.replay.iter().map(|s| s.command.as_str()).collect();
+            println!("live: replay commands {commands:?}");
+            assert!(
+                envelope.replay.iter().any(|s| s.command == "node.create" || s.command == "command.batch"),
+                "the replay holds the create: {commands:?}"
+            );
         }
-    })];
-    let tools = wire_tools(&definitions);
-    let messages = vec![json!({
-        "role": "user",
-        "content": "Create a rectangle 100 wide and 60 tall at 10,10 in the design. Use the create_node tool."
-    })];
-    let body = request_body(&config, &messages, &tools, false);
-    let m = transport.complete(&config, credential.as_deref(), &body).expect("the endpoint answers");
-    assert!(m.wants_tools(), "the model asked for a tool (text was {:?})", m.text);
-    let call = m.tool_calls.iter().find(|c| c.name == "create_node").expect("it used the tool it was given");
-    println!("live: `create_node` with {:?}", call.arguments);
-    assert_eq!(call.arguments["type"], "rectangle", "with usable arguments");
-    assert_eq!(call.arguments["width"], 100);
-    assert_eq!(call.arguments["height"], 60);
+        other => panic!("expected a success with a replay, got {other:?}"),
+    }
 }
 
 #[test]
 #[ignore = "needs FIGCRAFT_AI_BASE_URL and FIGCRAFT_AI_MODEL; set them to run against a real endpoint"]
-fn a_model_writes_a_structured_requirements_document() {
+fn cancelling_mid_turn_commits_nothing() {
     let Some((config, credential)) = live_config() else {
         eprintln!("skipped: set FIGCRAFT_AI_BASE_URL and FIGCRAFT_AI_MODEL to run this");
         return;
     };
-    let transport = Transport::new(180);
-    let definitions = vec![json!({
-        "name": "upsert_requirements",
-        "description": "Write a structured requirements document into the design file",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "title": {"type": "string"},
-                "goals": {"type": "array", "items": {"type": "string"}},
-                "requirements": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {"title": {"type": "string"}, "priority": {"type": "string"}},
-                        "required": ["title"]
-                    }
-                },
-                "acceptanceCriteria": {"type": "array", "items": {"type": "string"}}
-            },
-            "required": ["title"]
-        }
-    })];
-    let tools = wire_tools(&definitions);
-    let messages = vec![json!({
-        "role": "user",
-        "content": "Write a requirements document titled `Checkout` for a mobile checkout redesign, with at least 4 goals, 12 requirements and 9 acceptance criteria. Use the upsert_requirements tool."
-    })];
-    let body = request_body(&config, &messages, &tools, false);
-    let m = transport.complete(&config, credential.as_deref(), &body).expect("the endpoint answers");
-    let call = m.tool_calls.iter().find(|c| c.name == "upsert_requirements").expect("it used the requirements tool");
-    let count = |key: &str| call.arguments.get(key).and_then(|v| v.as_array()).map(Vec::len).unwrap_or(0);
-    let (goals, reqs, criteria) = (count("goals"), count("requirements"), count("acceptanceCriteria"));
-    println!("live: PRD `{}` with {goals} goals, {reqs} requirements, {criteria} criteria", call.arguments["title"]);
-    assert_eq!(call.arguments["title"], "Checkout");
-    assert!(goals >= 4, "at least four goals, got {goals}");
-    assert!(reqs >= 12, "at least twelve requirements, got {reqs}");
-    assert!(criteria >= 9, "at least nine acceptance criteria, got {criteria}");
+    // Cancelled before the first poll: the strongest form of "no late result may commit".
+    let cancel = CancelToken::new();
+    cancel.cancel();
+    let terminal = run(turn(config, "Create a very large layout with forty layers.", cancel), shadow(), credential.as_deref(), &mut |_| {});
+    assert!(terminal.commit().is_none(), "a cancelled turn carries no envelope");
+    assert!(matches!(terminal, TurnTerminal::Cancelled { .. }), "got {terminal:?}");
+    println!("live: cancellation committed nothing");
 }

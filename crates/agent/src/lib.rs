@@ -14,13 +14,11 @@ pub mod config;
 pub mod gateway;
 pub mod history;
 pub mod run;
+pub mod runtime;
+pub mod runtime_prompt;
 pub mod shadow;
 pub mod terminal;
 pub mod tools;
-/// The model transport (blocking HTTP with tool calling). Native only: the browser has no sockets
-/// and uses fetch, and ureq's TLS stack cannot build for wasm (dependencies are not empty).
-#[cfg(not(target_arch = "wasm32"))]
-pub mod transport;
 
 #[cfg(test)]
 #[path = "gateway_tests.rs"]
@@ -45,6 +43,7 @@ mod tools_tests;
 pub use config::{AgentConfig, ConfigError, Route};
 pub use gateway::{Credentials, Environment, ModelGateway, ProviderError};
 pub use run::{AgentEvent, AgentRun, CancelToken, Limits, Outcome, RetryPolicy, ToolCall};
+pub use runtime::Turn as AgentTurn;
 pub use terminal::{CommitEnvelope, TurnProgress, TurnTerminal};
 
 /// What went wrong, classified once at the Agent boundary.

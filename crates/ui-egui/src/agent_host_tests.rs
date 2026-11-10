@@ -3,7 +3,7 @@
 use figcraft_agent::AgentErrorKind;
 use figcraft_agent::run::{AgentEvent, Limits};
 
-use crate::agent_host::{AgentHost, HostRequest, HostStatus, NoAgent, Snapshot, TurnOutcome};
+use crate::agent_host::{AgentHost, HostMessage, HostRequest, HostStatus, NoAgent, Snapshot};
 
 fn snapshot() -> Snapshot {
     let doc = figcraft_doc::Document::new("probe");
@@ -40,19 +40,19 @@ fn a_host_with_no_runtime_reports_a_readable_failure() {
     // streaming forever.
     let mut host = NoAgent::default();
     let _token = start(&mut host, 1);
-    let events = host.drain();
-    assert_eq!(events.len(), 1, "one event: the failure");
-    match &events[0] {
-        AgentEvent::Failed { turn, kind, message } => {
+    let messages = host.drain();
+    assert_eq!(messages.len(), 1, "one message: the failure");
+    match &messages[0] {
+        HostMessage::Terminal(figcraft_agent::TurnTerminal::Failed { turn, kind, message, .. }) => {
             assert_eq!(*turn, 1);
             assert_eq!(*kind, AgentErrorKind::Configuration, "a missing runtime is a configuration matter");
             assert!(message.contains("no Agent runtime"), "the message says what is missing: {message}");
         }
-        other => panic!("expected Failed, got {other:?}"),
+        other => panic!("expected a failed terminal, got {other:?}"),
     }
-    assert!(events[0].is_terminal(), "and the turn is over");
+    assert!(messages[0].is_terminal(), "and the turn is over");
+    assert!(messages[0].turn() == 1);
     assert_eq!(host.status(), HostStatus::Idle);
-    assert!(host.take_terminal().is_none(), "nothing to commit");
 }
 
 #[test]
@@ -60,7 +60,7 @@ fn draining_empties_the_queue() {
     let mut host = NoAgent::default();
     let _ = start(&mut host, 1);
     assert_eq!(host.drain().len(), 1);
-    assert!(host.drain().is_empty(), "the events are taken once");
+    assert!(host.drain().is_empty(), "the messages are taken once");
 }
 
 #[test]
@@ -110,18 +110,23 @@ fn the_desktop_worker_reports_an_unreachable_provider_and_commits_nothing() {
         cancel: figcraft_agent::run::CancelToken::new(),
     })));
 
-    let mut events = Vec::new();
+    let mut messages = Vec::new();
     for _ in 0..400 {
-        events.extend(worker.drain());
-        if events.iter().any(AgentEvent::is_terminal) {
+        let batch = worker.drain();
+        let ended = batch.iter().any(HostMessage::is_terminal);
+        messages.extend(batch);
+        if ended {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
-    assert!(events.iter().any(|e| matches!(e, AgentEvent::Started { turn: 1 })), "the turn started: {events:?}");
-    let terminal = events.iter().find(|e| e.is_terminal()).expect("the turn ended");
-    match terminal {
-        AgentEvent::Failed { kind, .. } => {
+    assert!(messages.iter().any(|m| matches!(m, HostMessage::Progress(AgentEvent::Started { turn: 1 }))), "the turn started: {messages:?}");
+    let terminal = messages.iter().find_map(|m| match m {
+        HostMessage::Terminal(t) => Some(t),
+        _ => None,
+    });
+    match terminal.expect("the turn ended") {
+        figcraft_agent::TurnTerminal::Failed { kind, .. } => {
             assert!(
                 matches!(kind, AgentErrorKind::Unreachable | AgentErrorKind::Timeout),
                 "an unreachable provider is classified as such, got {kind:?}"
@@ -129,8 +134,12 @@ fn the_desktop_worker_reports_an_unreachable_provider_and_commits_nothing() {
         }
         other => panic!("expected a failure, got {other:?}"),
     }
-    let terminal = worker.take_terminal();
-    assert!(terminal.as_ref().is_none_or(|t| t.commit().is_none()), "a failed turn commits nothing");
+    // The ending came through the same queue as the progress, and carries no envelope.
+    if let Some(HostMessage::Terminal(t)) = messages.last() {
+        assert!(t.commit().is_none(), "a failed turn commits nothing");
+    } else {
+        panic!("the turn must end with a terminal: {messages:?}");
+    }
     worker.shutdown();
 }
 
@@ -147,27 +156,31 @@ fn shutting_the_worker_down_joins_it() {
 }
 
 #[test]
-fn a_turn_outcome_knows_whether_it_finished() {
-    let mut outcome = TurnOutcome::default();
-    assert!(!outcome.is_finished(), "an empty outcome has not finished");
-    outcome.events.push(AgentEvent::Started { turn: 1 });
-    assert!(!outcome.is_finished(), "progress events do not finish a turn");
-    outcome.terminal = Some(figcraft_agent::TurnTerminal::Cancelled { turn: 1 });
-    assert!(outcome.is_finished(), "a terminal value finishes it");
+fn one_queue_carries_progress_and_its_terminal_in_order() {
+    // The contract this pins: progress and the ending share one FIFO, so the ending is the last
+    // message of its turn by construction. Two deliveries -- a list plus a terminal slot -- allowed
+    // the UI to see an ending while progress was still arriving.
+    let mut host = NoAgent::default();
+    let _ = start(&mut host, 1);
+    let messages = host.drain();
+    let last = messages.last().expect("the turn produced something");
+    assert!(last.is_terminal(), "the ending is last: {messages:?}");
+    assert!(messages[..messages.len() - 1].iter().all(|m| !m.is_terminal()), "and it is the only one");
+    assert!(messages.iter().all(|m| m.turn() == 1), "every message names its turn");
 }
 
 #[test]
-fn only_a_successful_outcome_exposes_a_commit() {
-    // The whole point of the typed terminal: the host hands back one value, and a replay is reachable
-    // only from a success. A failure with edits is not representable, so no caller can apply one.
-    let mut outcome = TurnOutcome::default();
+fn only_a_successful_terminal_exposes_a_commit() {
+    // A replay is reachable only from a success, so no caller can apply one after a failure.
     for terminal in [
         figcraft_agent::TurnTerminal::Failed { turn: 1, kind: AgentErrorKind::Protocol, message: "bad".into() },
         figcraft_agent::TurnTerminal::Cancelled { turn: 1 },
         figcraft_agent::TurnTerminal::LimitReached { turn: 1, kind: AgentErrorKind::Timeout, message: "slow".into() },
     ] {
-        outcome.terminal = Some(terminal);
-        assert!(outcome.commit().is_none(), "an unsuccessful ending carries no envelope");
+        let message = HostMessage::Terminal(terminal);
+        if let HostMessage::Terminal(t) = &message {
+            assert!(t.commit().is_none(), "an unsuccessful ending carries no envelope");
+        }
     }
 
     let envelope = figcraft_agent::CommitEnvelope::new(
@@ -177,19 +190,23 @@ fn only_a_successful_outcome_exposes_a_commit() {
         vec![figcraft_agent::shadow::ReplayStep { command: "node.create".into(), params: serde_json::json!({}) }],
         "AI: x",
     );
-    outcome.terminal = Some(figcraft_agent::TurnTerminal::Success { turn: 1, answer: "d".into(), commit: Some(envelope), continuation: Vec::new() });
-    assert!(outcome.commit().is_some(), "a success exposes its envelope");
+    let success = HostMessage::Terminal(figcraft_agent::TurnTerminal::Success {
+        turn: 1,
+        answer: "d".into(),
+        commit: Some(envelope),
+        continuation: Vec::new(),
+    });
+    if let HostMessage::Terminal(t) = &success {
+        assert!(t.commit().is_some(), "a success exposes its envelope");
+    }
 }
 
 #[test]
-fn a_success_without_edits_exposes_no_commit() {
-    // A read-only turn succeeds and changes nothing; there is no envelope to apply.
-    let outcome = TurnOutcome {
-        events: Vec::new(),
-        terminal: Some(figcraft_agent::TurnTerminal::Success { turn: 1, answer: "looked".into(), commit: None, continuation: Vec::new() }),
-    };
-    assert!(outcome.is_finished());
-    assert!(outcome.commit().is_none());
+fn a_read_only_success_exposes_no_commit() {
+    // A turn that only looked at the document succeeds and changes nothing; there is nothing to apply.
+    let terminal = figcraft_agent::TurnTerminal::Success { turn: 1, answer: "looked".into(), commit: None, continuation: Vec::new() };
+    assert!(terminal.commit().is_none());
+    assert_eq!(terminal.outcome(), figcraft_agent::run::Outcome::Completed, "and it is not 'committed'");
 }
 
 #[test]
@@ -212,22 +229,29 @@ fn a_cancelled_turn_produces_one_cancelled_event_and_no_replay() {
     // or failed, and never with a replay.
     token.cancel();
     let _ = worker.start(HostRequest::Cancel);
-    let mut events = Vec::new();
+    let mut messages = Vec::new();
     for _ in 0..200 {
-        events.extend(worker.drain());
-        if events.iter().any(AgentEvent::is_terminal) {
+        let batch = worker.drain();
+        let ended = batch.iter().any(HostMessage::is_terminal);
+        messages.extend(batch);
+        if ended {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
-    if let Some(terminal) = events.iter().find(|e| e.is_terminal()) {
-        assert!(
-            matches!(terminal, AgentEvent::Cancelled { .. } | AgentEvent::Failed { .. }),
-            "a cancelled turn ends cancelled or failed, not committed: {terminal:?}"
-        );
+    match messages.iter().find_map(|m| match m {
+        HostMessage::Terminal(t) => Some(t),
+        _ => None,
+    }) {
+        Some(t) => {
+            assert!(
+                matches!(t, figcraft_agent::TurnTerminal::Cancelled { .. } | figcraft_agent::TurnTerminal::Failed { .. }),
+                "a cancelled turn ends cancelled or failed, not committed: {t:?}"
+            );
+            assert!(t.commit().is_none(), "a cancelled turn commits nothing");
+        }
+        None => panic!("the turn must end: {messages:?}"),
     }
-    let terminal = worker.take_terminal();
-    assert!(terminal.as_ref().is_none_or(|t| t.commit().is_none()), "a cancelled turn commits nothing");
     worker.shutdown();
 }
 

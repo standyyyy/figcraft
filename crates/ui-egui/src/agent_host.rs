@@ -90,29 +90,66 @@ pub enum HostRequest {
     Cancel,
 }
 
+/// One thing the host has to tell the UI, in the order it happened.
+///
+/// Progress and the ending share **one** queue. They used to be two deliveries -- a list of events
+/// and a separate terminal slot -- so the UI could observe a terminal while progress was still
+/// arriving, or read an ending that did not match the events before it. One ordered queue makes the
+/// ending the last thing after its own progress, by construction.
+#[derive(Debug, Clone, PartialEq)]
+pub enum HostMessage {
+    /// Something that happened while the turn ran.
+    Progress(AgentEvent),
+    /// How the turn ended. Always the last message of its turn.
+    Terminal(TurnTerminal),
+}
+
+impl HostMessage {
+    /// The turn this message belongs to.
+    pub fn turn(&self) -> u64 {
+        match self {
+            HostMessage::Progress(e) => e.turn(),
+            HostMessage::Terminal(t) => t.turn(),
+        }
+    }
+
+    /// Whether this message ends its turn.
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, HostMessage::Terminal(_))
+    }
+}
+
 /// A platform's way to run Agent turns.
 ///
 /// Implementations own the model, the shadow and the transport; they never borrow the app's
 /// `Session` or `FigApp`. `drain` is called once per frame on the UI thread and must not block.
 pub trait AgentHost {
-    /// Begin a turn. The host emits events as it runs, and the panel polls them with [`drain`].
+    /// Begin a turn. The host emits messages as it runs, and the panel polls them with [`drain`].
     ///
     /// Returns the token that cancels this turn, so the panel can offer Stop.
     ///
     /// [`drain`]: AgentHost::drain
     fn start(&mut self, request: HostRequest) -> CancelToken;
 
-    /// Take the events produced since the last call. Never blocks.
-    fn drain(&mut self) -> Vec<AgentEvent>;
-
-    /// How the turn that just finished ended, once.
+    /// Take the messages produced since the last call, in order. Never blocks.
     ///
-    /// The replay travels inside a successful [`TurnTerminal`]; there is no separate channel for it,
-    /// so a failure cannot be paired with an edit to apply.
-    fn take_terminal(&mut self) -> Option<TurnTerminal>;
+    /// Every enqueue also wakes the UI, so a turn that produces output while the pointer is still
+    /// repaints without waiting for unrelated input.
+    fn drain(&mut self) -> Vec<HostMessage>;
 
     /// Whether a turn is running.
+    ///
+    /// Stays `Running` until the terminal message has been **drained**, not merely produced: while the
+    /// ending is still queued the turn is not yet finished from the UI's point of view.
     fn status(&self) -> HostStatus;
+
+    /// The egui context to wake whenever a message is queued.
+    ///
+    /// A turn that streams while the pointer is still must repaint, or its output appears only at the
+    /// next input event. Called once with the app's context; a host with no wake yet keeps working.
+    fn set_wake(&mut self, ctx: egui::Context) {
+        let _ = ctx;
+    }
 
     /// A short description for diagnostics (`"desktop worker"`, `"browser"`).
     fn describe(&self) -> String;
@@ -135,28 +172,24 @@ pub fn shadow_session_from_snapshot(snapshot: &Snapshot) -> Result<figcraft_engi
 /// `Option` at every call site.
 #[derive(Clone, Debug, Default)]
 pub struct NoAgent {
-    /// Events reported instead of running (a failure with the reason).
-    failed: Vec<AgentEvent>,
+    /// What to report instead of running: a failure with the reason.
+    queue: Vec<HostMessage>,
 }
 
 impl AgentHost for NoAgent {
     fn start(&mut self, request: HostRequest) -> CancelToken {
         // Report a failure with a readable cause rather than pretending to run: the panel then shows
-        // "this build has no Agent runtime" instead of streaming nothing.
+        // "this build has no Agent runtime" instead of streaming nothing. One terminal, in order.
         if let HostRequest::Start(req) = request {
             let turn = req.turn;
             let (kind, message) = no_runtime_message();
-            self.failed.push(AgentEvent::Failed { turn, kind, message: message.to_string() });
+            self.queue.push(HostMessage::Terminal(TurnTerminal::Failed { turn, kind, message: message.to_string() }));
         }
         CancelToken::new()
     }
 
-    fn drain(&mut self) -> Vec<AgentEvent> {
-        std::mem::take(&mut self.failed)
-    }
-
-    fn take_terminal(&mut self) -> Option<TurnTerminal> {
-        None
+    fn drain(&mut self) -> Vec<HostMessage> {
+        std::mem::take(&mut self.queue)
     }
 
     fn status(&self) -> HostStatus {

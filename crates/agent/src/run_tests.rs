@@ -273,11 +273,7 @@ fn a_turn_stopped_by_a_limit_keeps_its_record_but_applies_nothing() {
     let limits = Limits::default();
     let mut run = AgentRun::new(1, "build the sidebar");
     run.apply(&AgentEvent::ToolFinished { turn: 1, name: "batch".into(), ok: true }, &limits);
-    let terminal = crate::TurnTerminal::LimitReached {
-        turn: 1,
-        kind: crate::AgentErrorKind::Model,
-        message: "the turn used its rounds".into(),
-    };
+    let terminal = crate::TurnTerminal::LimitReached { turn: 1, kind: crate::AgentErrorKind::Model, message: "the turn used its rounds".into() };
     run.settle(&terminal);
     assert_eq!(run.outcome, Some(Outcome::Failed), "a cut-short turn records that it did not finish");
     assert_eq!(run.tools.len(), 1, "what it built is on the record");

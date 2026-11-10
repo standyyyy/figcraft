@@ -17,18 +17,36 @@ use std::rc::Rc;
 use figcraft_agent::run::{AgentEvent, CancelToken};
 use figcraft_agent::{TurnTerminal, runtime::TurnDriver};
 
-use crate::agent_host::{AgentHost, HostRequest, HostStatus, Snapshot, TurnRequest};
+use crate::agent_host::{AgentHost, HostMessage, HostRequest, HostStatus, Snapshot, TurnRequest};
 
 /// Shared state between the future and the host: the future runs on the page's loop, so it cannot be
 /// borrowed across an await.
 #[derive(Default)]
 struct Shared {
-    /// Events the future produced, not yet drained.
-    events: Vec<AgentEvent>,
-    /// How the turn ended, once.
-    terminal: Option<TurnTerminal>,
-    /// Whether a turn is running.
+    /// The one queue the future fills and the UI drains, in order: progress then its terminal.
+    queue: std::collections::VecDeque<HostMessage>,
+    /// Whether a turn is running. Cleared when the terminal is *drained*, not when produced.
     running: bool,
+    /// The egui context to wake whenever a message is queued.
+    ///
+    /// A page repaints only on input otherwise, so a turn that streams while nobody touches the page
+    /// would show nothing until the next click or key.
+    wake: Option<egui::Context>,
+}
+
+/// Queue `message` and wake the page.
+fn push(shared: &Rc<RefCell<Shared>>, message: HostMessage) {
+    let wake = match shared.try_borrow_mut() {
+        Ok(mut s) => {
+            s.queue.push_back(message);
+            s.wake.clone()
+        }
+        // A borrow in progress means the UI is draining; the message waits for the next step.
+        Err(_) => None,
+    };
+    if let Some(ctx) = wake {
+        ctx.request_repaint();
+    }
 }
 
 /// Runs turns on the browser's event loop.
@@ -66,8 +84,7 @@ impl AgentHost for LocalFutureHost {
                 self.cancel = Some(cancel.clone());
                 if let Ok(mut shared) = self.shared.try_borrow_mut() {
                     shared.running = true;
-                    shared.events.clear();
-                    shared.terminal = None;
+                    shared.queue.clear();
                 }
                 let shared = Rc::clone(&self.shared);
                 // A local future: it awaits the provider through the browser's fetch and yields to the
@@ -80,21 +97,32 @@ impl AgentHost for LocalFutureHost {
         }
     }
 
-    fn drain(&mut self) -> Vec<AgentEvent> {
+    fn drain(&mut self) -> Vec<HostMessage> {
         match self.shared.try_borrow_mut() {
-            Ok(mut shared) => std::mem::take(&mut shared.events),
+            Ok(mut shared) => {
+                let messages: Vec<HostMessage> = shared.queue.drain(..).collect();
+                // The turn is over once its ending has been drained; until then it is still theirs to
+                // settle, and a second start would race that.
+                if messages.iter().any(HostMessage::is_terminal) {
+                    shared.running = false;
+                }
+                messages
+            }
             Err(_) => Vec::new(),
         }
-    }
-
-    fn take_terminal(&mut self) -> Option<TurnTerminal> {
-        self.shared.try_borrow_mut().ok().and_then(|mut s| s.terminal.take())
     }
 
     fn status(&self) -> HostStatus {
         match self.shared.try_borrow() {
             Ok(s) if s.running => HostStatus::Running,
             _ => HostStatus::Idle,
+        }
+    }
+
+    /// Keep the app's context, so a queued message repaints without waiting for input.
+    fn set_wake(&mut self, ctx: egui::Context) {
+        if let Ok(mut s) = self.shared.try_borrow_mut() {
+            s.wake = Some(ctx);
         }
     }
 
@@ -120,9 +148,7 @@ impl Orchestrator {
     async fn run(mut self, shared: Rc<RefCell<Shared>>) {
         loop {
             for event in self.driver.take_events() {
-                if let Ok(mut s) = shared.try_borrow_mut() {
-                    s.events.push(event);
-                }
+                push(&shared, HostMessage::Progress(event));
             }
             if self.driver.is_done() {
                 break;
@@ -135,15 +161,11 @@ impl Orchestrator {
             }
         }
         for event in self.driver.take_events() {
-            if let Ok(mut s) = shared.try_borrow_mut() {
-                s.events.push(event);
-            }
+            push(&shared, HostMessage::Progress(event));
         }
-        let terminal = self.driver.finish();
-        if let Ok(mut s) = shared.try_borrow_mut() {
-            s.terminal = Some(terminal);
-            s.running = false;
-        }
+        // Progress first, then exactly one terminal, in one queue: the ending is the last message of
+        // its turn by construction.
+        push(&shared, HostMessage::Terminal(self.driver.finish()));
     }
 }
 

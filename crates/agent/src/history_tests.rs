@@ -154,7 +154,6 @@ fn compaction_writes_an_explicit_summary_never_a_silent_discard() {
 #[test]
 fn the_summary_records_how_each_turn_ended() {
     let mut c = Conversation::new("c1");
-    let limits = limits();
     let mut failed = AgentRun::new(1, "broke");
     failed.settle(&crate::TurnTerminal::Failed { turn: 1, kind: crate::AgentErrorKind::Timeout, message: "slow".into() });
     c.push(failed);

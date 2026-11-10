@@ -12,6 +12,11 @@ fn limits() -> Limits {
     Limits::default()
 }
 
+/// A success with no edits: enough for a panel-state test, and nothing to commit.
+fn success_terminal(turn: u64) -> figcraft_agent::TurnTerminal {
+    figcraft_agent::TurnTerminal::Success { turn, answer: String::new(), commit: None, continuation: Vec::new() }
+}
+
 #[test]
 fn a_new_panel_is_idle_with_an_empty_composer() {
     let p = AgentPanel::new("doc-1");
@@ -55,7 +60,7 @@ fn a_turn_streams_text_then_commits() {
     p.apply(&AgentEvent::TextDelta { turn: 1, text: "it.".into() }, &l);
     assert_eq!(p.current.as_ref().map(|r| r.answer.as_str()), Some("Drawing it."));
 
-    p.apply(&AgentEvent::Committed { turn: 1, undo_label: "AI: draw a card".into() }, &l);
+    p.settle(&success_terminal(1), Some("AI: draw a card"));
     assert_eq!(p.status, RunStatus::Done);
     assert_eq!(p.last_undo_label.as_deref(), Some("AI: draw a card"), "the undo step is shown");
     assert!(!p.is_running());
@@ -84,9 +89,8 @@ fn tool_rows_follow_the_events() {
 #[test]
 fn a_failure_shows_the_message_and_the_action() {
     let mut p = AgentPanel::new("doc-1");
-    let l = limits();
     p.begin_turn(1, "x");
-    p.apply(&AgentEvent::Failed { turn: 1, kind: AgentErrorKind::Authentication, message: "refused".into() }, &l);
+    p.settle(&figcraft_agent::TurnTerminal::Failed { turn: 1, kind: AgentErrorKind::Authentication, message: "refused".into() }, None);
     assert_eq!(p.status, RunStatus::Failed);
     let error = p.error.as_deref().expect("an error is shown");
     assert!(error.contains("refused"), "the message is shown: {error}");
@@ -97,9 +101,15 @@ fn a_failure_shows_the_message_and_the_action() {
 fn a_revision_conflict_is_its_own_status_with_a_rerun_offer() {
     // The offer differs: a conflict means "run it again", not "fix a setting".
     let mut p = AgentPanel::new("doc-1");
-    let l = limits();
     p.begin_turn(1, "x");
-    p.apply(&AgentEvent::Failed { turn: 1, kind: AgentErrorKind::Conflict, message: "the document changed while the Agent worked".into() }, &l);
+    p.settle(
+        &figcraft_agent::TurnTerminal::Failed {
+            turn: 1,
+            kind: AgentErrorKind::Conflict,
+            message: "the document changed while the Agent worked".into(),
+        },
+        None,
+    );
     assert_eq!(p.status, RunStatus::Conflict, "not a generic failure");
     let error = p.error.as_deref().expect("error text");
     assert!(error.contains("Run the request again"), "the action is to rerun: {error}");
@@ -112,12 +122,12 @@ fn cancelling_settles_the_turn() {
     let l = limits();
     p.begin_turn(1, "x");
     p.apply(&AgentEvent::TextDelta { turn: 1, text: "part".into() }, &l);
-    p.apply(&AgentEvent::Cancelled { turn: 1 }, &l);
+    p.settle(&figcraft_agent::TurnTerminal::Cancelled { turn: 1 }, None);
     assert_eq!(p.status, RunStatus::Cancelled);
     assert!(!p.is_running());
     assert_eq!(p.current.as_ref().map(|r| r.answer.as_str()), Some("part"), "the text so far is kept");
     // A late commit cannot revive a cancelled turn.
-    p.apply(&AgentEvent::Committed { turn: 1, undo_label: "AI: late".into() }, &l);
+    p.settle(&success_terminal(1), Some("AI: late"));
     assert_eq!(p.status, RunStatus::Done, "the panel shows what the runtime reported last");
     assert_eq!(
         p.current.as_ref().and_then(|r| r.outcome),
@@ -132,7 +142,7 @@ fn the_summary_for_inspect_is_small_and_carries_no_transcript() {
     let l = limits();
     p.begin_turn(1, "x");
     p.apply(&AgentEvent::TextDelta { turn: 1, text: "a secret-ish answer".into() }, &l);
-    p.apply(&AgentEvent::Committed { turn: 1, undo_label: "AI: x".into() }, &l);
+    p.settle(&success_terminal(1), Some("AI: x"));
 
     let s = p.summary();
     let text = s.to_string();
@@ -290,7 +300,7 @@ fn a_chat_view_shows_finished_turns_and_the_summary() {
     let l = limits();
     c.apply(&AgentEvent::Started { turn: 1 }, "draw", &l);
     c.apply(&AgentEvent::TextDelta { turn: 1, text: "done".into() }, "draw", &l);
-    c.apply(&AgentEvent::Committed { turn: 1, undo_label: "AI: draw".into() }, "draw", &l);
+    c.settle(&success_terminal(1), "draw");
 
     let view = conversation_view(&t, "doc-1");
     assert_eq!(view.runs.len(), 1);
@@ -344,14 +354,14 @@ fn the_conversation_id_is_per_file() {
 /// A host that records what it was asked and emits a scripted turn.
 struct Scripted {
     started: Vec<(u64, String)>,
-    events: Vec<figcraft_agent::run::AgentEvent>,
+    queue: Vec<crate::agent_host::HostMessage>,
     terminal: Option<figcraft_agent::TurnTerminal>,
     status: crate::agent_host::HostStatus,
 }
 
 impl Scripted {
     fn new() -> Self {
-        Self { started: Vec::new(), events: Vec::new(), terminal: None, status: crate::agent_host::HostStatus::Idle }
+        Self { started: Vec::new(), queue: Vec::new(), terminal: None, status: crate::agent_host::HostStatus::Idle }
     }
     /// A turn that succeeds with `replay`, built against `uid`/`revision`.
     fn committing(replay: Vec<serde_json::Value>, uid: u64, revision: u64) -> Self {
@@ -382,20 +392,19 @@ impl crate::agent_host::AgentHost for Scripted {
         if let crate::agent_host::HostRequest::Start(req) = request {
             self.started.push((req.turn, req.request.clone()));
             let turn = req.turn;
-            self.events = vec![
-                figcraft_agent::run::AgentEvent::Started { turn },
-                figcraft_agent::run::AgentEvent::TextDelta { turn, text: "done".into() },
-                figcraft_agent::run::AgentEvent::Committed { turn, undo_label: "AI: x".into() },
+            self.queue = vec![
+                crate::agent_host::HostMessage::Progress(figcraft_agent::run::AgentEvent::Started { turn }),
+                crate::agent_host::HostMessage::Progress(figcraft_agent::run::AgentEvent::TextDelta { turn, text: "done".into() }),
             ];
+            if let Some(terminal) = self.terminal.take() {
+                self.queue.push(crate::agent_host::HostMessage::Terminal(terminal));
+            }
             self.status = crate::agent_host::HostStatus::Idle;
         }
         figcraft_agent::run::CancelToken::new()
     }
-    fn drain(&mut self) -> Vec<figcraft_agent::run::AgentEvent> {
-        std::mem::take(&mut self.events)
-    }
-    fn take_terminal(&mut self) -> Option<figcraft_agent::TurnTerminal> {
-        self.terminal.take()
+    fn drain(&mut self) -> Vec<crate::agent_host::HostMessage> {
+        std::mem::take(&mut self.queue)
     }
     fn status(&self) -> crate::agent_host::HostStatus {
         self.status
@@ -546,11 +555,8 @@ impl crate::agent_host::AgentHost for TerminalHost {
     fn start(&mut self, _request: crate::agent_host::HostRequest) -> figcraft_agent::run::CancelToken {
         figcraft_agent::run::CancelToken::new()
     }
-    fn drain(&mut self) -> Vec<figcraft_agent::run::AgentEvent> {
-        Vec::new()
-    }
-    fn take_terminal(&mut self) -> Option<figcraft_agent::TurnTerminal> {
-        self.0.take()
+    fn drain(&mut self) -> Vec<crate::agent_host::HostMessage> {
+        self.0.take().map(|t| vec![crate::agent_host::HostMessage::Terminal(t)]).unwrap_or_default()
     }
     fn status(&self) -> crate::agent_host::HostStatus {
         crate::agent_host::HostStatus::Idle
@@ -572,6 +578,7 @@ fn a_matching_envelope_commits_as_one_undo_step() {
     if let Some(p) = app.ui.agent.as_mut() {
         p.begin_turn(1, "draw");
     }
+    app.ui.agent_turn = 1;
     let step = figcraft_agent::shadow::ReplayStep {
         command: "node.create".into(),
         params: serde_json::json!({"type": "rectangle", "width": 10.0, "height": 10.0}),
@@ -601,6 +608,7 @@ fn a_stale_revision_is_refused_and_nothing_is_applied() {
     if let Some(p) = app.ui.agent.as_mut() {
         p.begin_turn(1, "draw");
     }
+    app.ui.agent_turn = 1;
     let step = figcraft_agent::shadow::ReplayStep { command: "node.create".into(), params: serde_json::json!({"type": "ellipse"}) };
     // Built against a revision the document no longer has.
     let envelope = figcraft_agent::CommitEnvelope::new(1, uid, revision + 5, vec![step], "AI: draw");
@@ -629,6 +637,7 @@ fn an_envelope_for_another_document_is_refused() {
     if let Some(p) = app.ui.agent.as_mut() {
         p.begin_turn(1, "draw");
     }
+    app.ui.agent_turn = 1;
     let step = figcraft_agent::shadow::ReplayStep { command: "node.create".into(), params: serde_json::json!({"type": "ellipse"}) };
     let envelope = figcraft_agent::CommitEnvelope::new(1, uid + 99, revision, vec![step], "AI: draw");
     app.ui.agent_host = Some(Box::new(TerminalHost(Some(figcraft_agent::TurnTerminal::Success {
@@ -646,13 +655,17 @@ fn an_envelope_for_another_document_is_refused() {
 }
 
 #[test]
-fn a_late_result_from_an_older_turn_is_refused() {
-    // A slow turn finishing after the panel moved on must not land in the newer one.
+fn a_late_result_from_an_older_turn_is_ignored_completely() {
+    // A slow turn finishing after the panel moved on must not land in the newer one, and must not
+    // touch it at all: the newer turn keeps streaming, its error stays clear, and its own outcome is
+    // decided by its own terminal. Reporting a conflict here would put a message about turn 3 in
+    // front of a person watching turn 7.
     let mut app = harness_with(true);
     let (uid, revision) = current(&app);
     if let Some(p) = app.ui.agent.as_mut() {
         p.begin_turn(7, "the newer request"); // the panel now shows turn 7
     }
+    app.ui.agent_turn = 7;
     let step = figcraft_agent::shadow::ReplayStep { command: "node.create".into(), params: serde_json::json!({"type": "star"}) };
     let envelope = figcraft_agent::CommitEnvelope::new(3, uid, revision, vec![step], "AI: the older one");
     app.ui.agent_host = Some(Box::new(TerminalHost(Some(figcraft_agent::TurnTerminal::Success {
@@ -667,8 +680,9 @@ fn a_late_result_from_an_older_turn_is_refused() {
 
     assert_eq!(app.session.doc().expect("doc").nodes().count(), before, "the stale turn did not land");
     let panel = app.ui.agent.as_ref().expect("panel");
-    assert_eq!(panel.status, RunStatus::Conflict);
-    assert!(panel.error.as_deref().is_some_and(|e| e.contains("older")), "and says so: {:?}", panel.error);
+    assert_eq!(panel.status, RunStatus::Streaming, "the newer turn is untouched and still running");
+    assert!(panel.error.is_none(), "no message about the older turn appears: {:?}", panel.error);
+    assert!(panel.last_undo_label.is_none(), "and it did not claim an undo step");
 }
 
 #[test]
@@ -678,6 +692,7 @@ fn a_limited_turn_applies_nothing() {
     if let Some(p) = app.ui.agent.as_mut() {
         p.begin_turn(1, "draw");
     }
+    app.ui.agent_turn = 1;
     app.ui.agent_host = Some(Box::new(TerminalHost(Some(figcraft_agent::TurnTerminal::LimitReached {
         turn: 1,
         kind: figcraft_agent::AgentErrorKind::Model,
@@ -769,6 +784,7 @@ fn opening_another_file_shows_that_files_conversation() {
     if let Some(p) = app.ui.agent.as_mut() {
         p.begin_turn(1, "the first file's request");
     }
+    app.ui.agent_turn = 1;
     crate::agent::begin_transcript_turn(&mut app.ui.agent_transcript, "doc-1", 1, "the first file's request");
     crate::agent::store_transcript(&mut app);
 

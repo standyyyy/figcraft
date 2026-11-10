@@ -228,6 +228,57 @@ impl AgentPanel {
     ///
     /// The panel decides nothing from an error string: `Failed` carries the classified kind, and a
     /// revision conflict is its own status because the offer is to rerun, not to fix a setting.
+    pub fn summary(&self) -> Value {
+        json!({
+            "tab": match self.tab {
+                AgentTab::Chat => "chat",
+                AgentTab::Requirements => "requirements",
+            },
+            "status": match self.status {
+                RunStatus::Idle => "idle",
+                RunStatus::Streaming => "streaming",
+                RunStatus::Tool => "tool",
+                RunStatus::Done => "done",
+                RunStatus::Failed => "failed",
+                RunStatus::Cancelled => "cancelled",
+                RunStatus::Conflict => "conflict",
+            },
+            "running": self.is_running(),
+            "canSend": self.can_send(),
+            "tools": self.tools.len(),
+            "hasError": self.error.is_some(),
+            "editingRequirements": self.editing.is_some(),
+        })
+    }
+
+    /// Show how the turn ended, from the terminal that says so.
+    ///
+    /// The panel's own status and the run's recorded outcome both come from this one value, so they
+    /// cannot disagree. What the *document* should do about it is the app's decision, not the panel's.
+    pub fn settle(&mut self, terminal: &figcraft_agent::TurnTerminal, undo_label: Option<&str>) {
+        if let Some(run) = self.current.as_mut() {
+            run.settle(terminal);
+        }
+        self.status = match terminal {
+            figcraft_agent::TurnTerminal::Success { .. } => RunStatus::Done,
+            figcraft_agent::TurnTerminal::Cancelled { .. } => RunStatus::Cancelled,
+            // A failure says what happened *and* what to do about it: the kind knows the action, and a
+            // message alone leaves a person with nowhere to go.
+            figcraft_agent::TurnTerminal::Failed { kind, message, .. } => {
+                self.error = Some(format!("{message} {}", kind.action()));
+                // A revision conflict is its own status: the offer is to rerun, not to fix a setting.
+                if *kind == figcraft_agent::AgentErrorKind::Conflict { RunStatus::Conflict } else { RunStatus::Failed }
+            }
+            figcraft_agent::TurnTerminal::LimitReached { kind, message, .. } => {
+                self.error = Some(format!("{message} {}", kind.action()));
+                RunStatus::Failed
+            }
+        };
+        if let Some(label) = undo_label {
+            self.last_undo_label = Some(label.to_string());
+        }
+    }
+
     pub fn apply(&mut self, event: &AgentEvent, limits: &Limits) {
         match event {
             AgentEvent::Started { .. } => self.status = RunStatus::Streaming,
@@ -252,26 +303,6 @@ impl AgentPanel {
                 }
                 self.status = RunStatus::Tool;
             }
-            AgentEvent::Committed { undo_label, .. } => {
-                if let Some(run) = self.current.as_mut() {
-                    run.apply(event, limits);
-                }
-                self.status = RunStatus::Done;
-                self.last_undo_label = Some(undo_label.clone());
-            }
-            AgentEvent::Failed { kind, message, .. } => {
-                if let Some(run) = self.current.as_mut() {
-                    run.apply(event, limits);
-                }
-                self.status = if *kind == figcraft_agent::AgentErrorKind::Conflict { RunStatus::Conflict } else { RunStatus::Failed };
-                self.error = Some(format!("{message} {}", kind.action()));
-            }
-            AgentEvent::Cancelled { .. } => {
-                if let Some(run) = self.current.as_mut() {
-                    run.apply(event, limits);
-                }
-                self.status = RunStatus::Cancelled;
-            }
             // A diagnostic: shown, but it changes neither the turn's status nor its record. The turn
             // is still running, and a notice is not a failure.
             AgentEvent::Notice { message, .. } => {
@@ -281,30 +312,6 @@ impl AgentPanel {
                 }
             }
         }
-    }
-
-    /// A short, stable summary for `ui.inspect`: no transcript, no credential.
-    pub fn summary(&self) -> Value {
-        json!({
-            "tab": match self.tab {
-                AgentTab::Chat => "chat",
-                AgentTab::Requirements => "requirements",
-            },
-            "status": match self.status {
-                RunStatus::Idle => "idle",
-                RunStatus::Streaming => "streaming",
-                RunStatus::Tool => "tool",
-                RunStatus::Done => "done",
-                RunStatus::Failed => "failed",
-                RunStatus::Cancelled => "cancelled",
-                RunStatus::Conflict => "conflict",
-            },
-            "running": self.is_running(),
-            "canSend": self.can_send(),
-            "tools": self.tools.len(),
-            "hasError": self.error.is_some(),
-            "editingRequirements": self.editing.is_some(),
-        })
     }
 }
 
@@ -462,9 +469,7 @@ impl Running {
     }
 
     /// The turn ended.
-    pub fn finish(&mut self) {
-        self.token = None;
-    }
+    pub fn finish(&mut self) {}
 }
 
 /// The transcript a panel shows for its conversation, from a file's transcript.
@@ -507,7 +512,8 @@ impl AgentPanel {
 /// running.
 pub fn status_of(run: Option<&AgentRun>) -> RunStatus {
     match run.and_then(|r| r.outcome) {
-        Some(Outcome::Committed) => RunStatus::Done,
+        Some(Outcome::Completed | Outcome::Committed) => RunStatus::Done,
+        Some(Outcome::Conflict) => RunStatus::Conflict,
         Some(Outcome::Failed) => RunStatus::Failed,
         Some(Outcome::Cancelled) => RunStatus::Cancelled,
         Some(Outcome::Interrupted) | None => RunStatus::Idle,
@@ -1088,36 +1094,51 @@ pub fn poll_host(app: &mut crate::FigApp) {
     // never borrows the session while painting.
     sync_transcript_from_document(app);
     let Some(host) = app.ui.agent_host.as_mut() else { return };
-    let events = host.drain();
-    let terminal = host.take_terminal();
-    if events.is_empty() && terminal.is_none() {
+    // Bind the app's context the first time: a turn that streams while nothing else happens still
+    // repaints. Done here because the context exists from the first frame, after the host is created.
+    if let Some(ctx) = app.ui_context.clone() {
+        host.set_wake(ctx);
+    }
+    let messages = host.drain();
+    if messages.is_empty() {
         return;
     }
     let limits = figcraft_agent::run::Limits::default();
-    for event in &events {
-        if let Some(panel) = app.ui.agent.as_mut() {
-            panel.apply(event, &limits);
+    // One pass, in order: progress then the ending, exactly as produced. A message about another turn
+    // is ignored entirely -- it must not clear this turn's token, touch its transcript record or set
+    // a conflict on it.
+    for message in messages {
+        if message.turn() != app.ui.agent_turn {
+            continue;
+        }
+        match message {
+            crate::agent_host::HostMessage::Progress(event) => {
+                if let Some(panel) = app.ui.agent.as_mut() {
+                    panel.apply(&event, &limits);
+                }
+            }
+            crate::agent_host::HostMessage::Terminal(terminal) => settle_turn(app, &terminal),
         }
     }
-    // The terminal value ends the turn. Only a success can carry an envelope, so a failure,
-    // cancellation or limit reaches `commit_turn` as no envelope at all.
-    if let Some(terminal) = terminal {
-        app.ui.agent_running.finish();
-        apply_terminal(app, &terminal);
-        // The turn is over: record how it ended in the file's conversation and persist it. Only a
-        // success can have committed anything, and `apply_terminal` has done that already.
-        if let Some(panel) = app.ui.agent.as_ref() {
-            record_turn(&mut app.ui.agent_transcript, panel, &terminal);
-        }
-        // A success carries Rig's transcript of the run: keep it for the next turn's history.
-        if let figcraft_agent::TurnTerminal::Success { continuation, .. } = &terminal
-            && !continuation.is_empty()
-            && let Some(convo) = app.ui.agent_transcript.conversations.last_mut()
-        {
-            convo.continuation = continuation.clone();
-        }
-        store_transcript(app);
+}
+
+/// Settle the turn a terminal belongs to: apply its envelope, then record and persist the outcome.
+fn settle_turn(app: &mut crate::FigApp, terminal: &figcraft_agent::TurnTerminal) {
+    app.ui.agent_running.finish();
+    apply_terminal(app, terminal);
+    // The turn is over: record how it ended in the file's conversation and persist it. Only a
+    // success can have committed anything, and `apply_terminal` has done that already.
+    if let Some(panel) = app.ui.agent.as_ref() {
+        record_turn(&mut app.ui.agent_transcript, panel, terminal);
     }
+    // A success carries Rig's transcript of the run: keep it for the next turn's history.
+    if let figcraft_agent::TurnTerminal::Success { continuation, .. } = terminal
+        && !continuation.is_empty()
+        && let Some(convo) = app.ui.agent_transcript.conversations.last_mut()
+    {
+        convo.continuation = continuation.clone();
+    }
+    store_transcript(app);
 }
 
 /// Report a turn's ending in the panel and, for a success, apply its envelope.

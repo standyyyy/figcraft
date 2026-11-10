@@ -214,3 +214,131 @@ fn replace_member(bytes: &[u8], name: &str, replacement: &[u8]) -> Vec<u8> {
     }
     out.into_inner()
 }
+
+// ---------- hostile archives ----------
+
+/// Every transcript-local failure still opens the document, without the transcript and with one
+/// actionable issue. None of these may panic, and none may allocate the declared size.
+fn opens_without_transcript(bytes: &[u8], what: &str) -> Vec<String> {
+    let loaded = crate::load_bytes_with_versions(bytes).unwrap_or_else(|e| panic!("{what}: the document must still open, got {e}"));
+    assert!(loaded.agent.is_none(), "{what}: the transcript must be skipped");
+    assert!(!loaded.issues.is_empty(), "{what}: an issue must say why");
+    assert!(!loaded.doc.pages.is_empty(), "{what}: the design document survived");
+    loaded.issues
+}
+
+#[test]
+fn a_transcript_that_declares_an_oversize_is_skipped_before_reading() {
+    // The declared size is checked first: a member claiming to be enormous is refused without the
+    // reader allocating anything for it.
+    let bytes = crate::tests_support::archive_with_transcript_bytes(&[b'x'; 64]).expect("archive");
+    // Rebuild with a declared oversize by hiding the real bytes behind a huge entry is not possible
+    // through the zip API without writing them, so this covers the reachable half: a member larger
+    // than the limit in fact.
+    let big = vec![b'{'; crate::agent::MAX_AGENT_BYTES + 1];
+    let bytes_big = crate::tests_support::archive_with_transcript_bytes(&big).expect("archive");
+    let issues = opens_without_transcript(&bytes_big, "an oversized member");
+    assert!(issues.iter().any(|i| i.contains("limit")), "the issue names the limit: {issues:?}");
+    // And the small malformed one is refused as malformed, not as oversize.
+    let issues = opens_without_transcript(&bytes, "a malformed member");
+    assert!(issues.iter().any(|i| i.contains("JSON") || i.contains("skipped")), "got {issues:?}");
+}
+
+#[test]
+fn a_transcript_of_exactly_the_limit_is_read() {
+    // The boundary is inclusive: a member at the limit is data, one byte over is refused. This is why
+    // the read asks for limit + 1 bytes rather than trusting the header.
+    let mut json = String::from("{\"version\":1,\"conversations\":[],\"pad\":\"");
+    let tail = "\"}";
+    let pad = crate::agent::MAX_AGENT_BYTES - json.len() - tail.len();
+    json.push_str(&"a".repeat(pad));
+    json.push_str(tail);
+    assert_eq!(json.len(), crate::agent::MAX_AGENT_BYTES, "exactly at the limit");
+
+    let bytes = crate::tests_support::archive_with_transcript_bytes(json.as_bytes()).expect("archive");
+    let loaded = crate::load_bytes_with_versions(&bytes).expect("the document opens");
+    assert!(loaded.agent.is_some(), "a member exactly at the limit is read");
+}
+
+#[test]
+fn a_non_utf8_transcript_in_the_archive_is_skipped() {
+    let bytes = crate::tests_support::archive_with_transcript_bytes(&[0xFF, 0xFE, 0x00]).expect("archive");
+    let issues = opens_without_transcript(&bytes, "non-UTF-8");
+    assert!(issues.iter().any(|i| i.contains("UTF-8")), "the issue says so: {issues:?}");
+}
+
+#[test]
+fn a_truncated_transcript_is_skipped() {
+    let bytes = crate::tests_support::archive_with_transcript_bytes(b"{\"version\":1,\"conversa").expect("archive");
+    opens_without_transcript(&bytes, "a truncated member");
+}
+
+#[test]
+fn a_transcript_with_too_many_conversations_is_skipped() {
+    // A file from a hand-edit or a hostile writer: the cap is enforced on read, not only on write.
+    let many: Vec<serde_json::Value> = (0..crate::agent::MAX_CONVERSATIONS + 1).map(|i| serde_json::json!({"id": format!("c{i}")})).collect();
+    let json = serde_json::json!({"version": 1, "conversations": many}).to_string();
+    let bytes = crate::tests_support::archive_with_transcript_bytes(json.as_bytes()).expect("archive");
+    let issues = opens_without_transcript(&bytes, "too many conversations");
+    assert!(issues.iter().any(|i| i.contains("conversation")), "got {issues:?}");
+}
+
+#[test]
+fn a_transcript_with_too_many_turns_is_skipped() {
+    let turns: Vec<serde_json::Value> = (0..crate::agent::MAX_TURNS + 1).map(|i| serde_json::json!({"turn": i})).collect();
+    let json = serde_json::json!({"version": 1, "conversations": [{"id": "c", "turns": turns}]}).to_string();
+    let bytes = crate::tests_support::archive_with_transcript_bytes(json.as_bytes()).expect("archive");
+    opens_without_transcript(&bytes, "too many turns");
+}
+
+#[test]
+fn a_transcript_with_unknown_future_fields_round_trips() {
+    // A newer writer adds a field this build does not know. It must survive a save, so a downgrade
+    // does not silently delete someone's data.
+    let json = serde_json::json!({
+        "version": 1,
+        "futureFeature": {"nested": [1, 2, 3]},
+        "conversations": [{"id": "c1", "turns": [], "alsoNew": true}],
+    })
+    .to_string();
+    let bytes = crate::tests_support::archive_with_transcript_bytes(json.as_bytes()).expect("archive");
+    let loaded = crate::load_bytes_with_versions(&bytes).expect("opens");
+    let agent = loaded.agent.expect("the transcript is read");
+    assert_eq!(agent.json["futureFeature"]["nested"], serde_json::json!([1, 2, 3]), "unknown fields are kept");
+
+    // Write it back and read again: the unknown data is still there.
+    let out = crate::save_bytes_full(&loaded.doc, None, &[], &[], Some(&agent)).expect("save");
+    let again = crate::load_bytes_with_versions(&out).expect("opens");
+    let agent2 = again.agent.expect("read");
+    assert_eq!(agent2.json["futureFeature"]["nested"], serde_json::json!([1, 2, 3]), "and survive a round trip");
+    assert_eq!(agent2.json["conversations"][0]["alsoNew"], serde_json::json!(true));
+}
+
+#[test]
+fn a_normal_transcript_round_trips_unchanged() {
+    // The happy path, so the hardening above is not achieved by refusing everything.
+    let json = serde_json::json!({"version": 1, "conversations": [{"id": "c1", "turns": [{"turn": 1, "request": "draw"}]}]});
+    let data = crate::agent::AgentData::new(json.clone());
+    let bytes = crate::tests_support::archive_with_transcript_bytes(&serde_json::to_vec(&json).expect("json")).expect("archive");
+    let loaded = crate::load_bytes_with_versions(&bytes).expect("opens");
+    assert_eq!(loaded.agent.expect("read"), data, "read back exactly");
+    assert!(loaded.issues.is_empty(), "and no complaint: {:?}", loaded.issues);
+}
+
+#[test]
+fn a_file_without_the_member_has_no_transcript_and_no_issue() {
+    // An older file: no member at all is not damage.
+    let mut doc = figcraft_embedded_agent_test_doc();
+    doc.repair();
+    let bytes = crate::save_bytes_full(&doc, None, &[], &[], None).expect("save");
+    let loaded = crate::load_bytes_with_versions(&bytes).expect("opens");
+    assert!(loaded.agent.is_none());
+    assert!(loaded.issues.is_empty(), "nothing to complain about: {:?}", loaded.issues);
+}
+
+/// A minimal document for the tests above.
+fn figcraft_embedded_agent_test_doc() -> crate::Document {
+    let mut doc = crate::Document::default();
+    doc.repair();
+    doc
+}

@@ -602,7 +602,13 @@ fn overrides(inst: &Value) -> (BTreeMap<u64, Vec<String>>, BTreeMap<u64, Vec<Str
     let list = |v: &Value| -> BTreeMap<u64, Vec<String>> {
         let entry = |e: &Value| {
             let id = e["guidPath"]["guids"].as_array().unwrap().last().unwrap()["localID"].as_u64().unwrap();
-            (id, e.as_object().unwrap().keys().filter(|k| *k != "guidPath").cloned().collect())
+            // Sorted, because this asks *which* fields are overridden or derived, not the order the
+            // exporter writes them in. That order comes from the export code and would otherwise make
+            // this test depend on `serde_json`'s map type, which `preserve_order` (enabled by Rig for
+            // the workspace) changes from sorted to insertion-ordered.
+            let mut keys: Vec<String> = e.as_object().unwrap().keys().filter(|k| *k != "guidPath").cloned().collect();
+            keys.sort();
+            (id, keys)
         };
         v.as_array().map(|a| a.iter().map(entry).collect()).unwrap_or_default()
     };

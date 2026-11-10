@@ -795,18 +795,34 @@ pub(crate) fn load_limited(bytes: &[u8], budget: ImageBudget, total: u64) -> Res
     // the document still opens.
     let agent = match z.by_name(agent::AGENT_MEMBER) {
         Ok(mut f) => {
-            let mut bytes = Vec::new();
-            match std::io::Read::read_to_end(&mut f, &mut bytes) {
-                Ok(_) => match agent::AgentData::from_bytes(&bytes) {
-                    Ok(a) => Some(a),
-                    Err(e) => {
-                        issues.push(format!("the Agent transcript was skipped: {e}"));
+            // Bounded before allocating: the declared size is checked first, and the read itself is
+            // capped one byte over the limit. A zip member can declare a small size and decompress to
+            // gigabytes, so `read_to_end` into an unbounded `Vec` would be a memory-exhaustion vector
+            // reachable by opening a file. Reading `limit + 1` distinguishes "at the limit" from "over
+            // it" without trusting the header.
+            let limit = agent::MAX_AGENT_BYTES;
+            let declared = f.size();
+            if declared > limit as u64 {
+                issues.push(format!("the Agent transcript was skipped: it declares {declared} bytes, over the {limit} limit"));
+                None
+            } else {
+                let mut bytes = Vec::with_capacity(declared.min(limit as u64) as usize);
+                match std::io::Read::read_to_end(&mut std::io::Read::take(&mut f, limit as u64 + 1), &mut bytes) {
+                    Ok(_) if bytes.len() > limit => {
+                        issues.push(format!("the Agent transcript was skipped: it decompressed to more than the {limit} byte limit"));
                         None
                     }
-                },
-                Err(e) => {
-                    issues.push(format!("the Agent transcript could not be read: {e}"));
-                    None
+                    Ok(_) => match agent::AgentData::from_bytes(&bytes) {
+                        Ok(a) => Some(a),
+                        Err(e) => {
+                            issues.push(format!("the Agent transcript was skipped: {e}"));
+                            None
+                        }
+                    },
+                    Err(e) => {
+                        issues.push(format!("the Agent transcript could not be read: {e}"));
+                        None
+                    }
                 }
             }
         }

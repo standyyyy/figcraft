@@ -65,6 +65,8 @@ mod a11y_tests;
 mod agent_host_tests;
 
 #[cfg(test)]
+mod agent_export_tests;
+#[cfg(test)]
 mod agent_layout_tests;
 #[cfg(test)]
 mod agent_tests;

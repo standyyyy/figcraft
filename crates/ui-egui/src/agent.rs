@@ -1574,6 +1574,23 @@ fn export_markdown(app: &mut crate::FigApp, id: &str) {
     };
     let bytes = markdown.len();
     let filename = markdown_filename(&name);
+
+    // A browser has no save dialog, so asking for one is a click that produces nothing. Route by what
+    // the platform can actually do, the way the other exports do.
+    if app.services.downloads() {
+        if app.services.download(&filename, markdown.as_bytes()) {
+            if let Some(p) = app.ui.agent.as_mut() {
+                p.export_note = Some(format!("{filename} ({bytes} bytes)"));
+                p.error = None;
+            }
+        } else if let Some(p) = app.ui.agent.as_mut() {
+            // A refused download says so: silence looks like success and the person looks for a file.
+            p.error = Some(crate::i18n::tr("the Markdown could not be downloaded").to_string());
+            p.export_note = None;
+        }
+        return;
+    }
+
     app.pick_save(crate::i18n::tr("Export requirements as Markdown"), &filename, &["md"], move |app, path| {
         match figcraft_engine::file_access::write(&path, markdown.as_bytes()) {
             Ok(()) => {

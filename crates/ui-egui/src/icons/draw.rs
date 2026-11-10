@@ -1077,6 +1077,12 @@ fn draw(p: &P, icon: Icon) {
             p.poly(&[(5.5, 5.5), (3.0, 8.0), (5.5, 10.5)], false);
             p.poly(&[(10.5, 5.5), (13.0, 8.0), (10.5, 10.5)], false);
         }
+        Agent => {
+            // A four-point spark: one long vertical and one long horizontal arm, with a smaller
+            // diagonal arm, so it reads as "generate" without being any product's mark.
+            p.poly(&[(8.0, 1.5), (9.2, 6.8), (14.5, 8.0), (9.2, 9.2), (8.0, 14.5), (6.8, 9.2), (1.5, 8.0), (6.8, 6.8)], true);
+            p.dot(12.0, 3.0, 0.9);
+        }
         Logo => {
             // FigCraft's own mark: the curled tail of the chameleon on the app icon. One bold
             // stroke: a shaft along the bottom, then three half turns, each tighter than the last.

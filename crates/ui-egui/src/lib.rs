@@ -15,6 +15,7 @@ pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
 };
 
 pub mod a11y;
+pub mod agent;
 pub mod bidi;
 pub mod canvas;
 pub mod cjk;
@@ -49,6 +50,8 @@ mod theme_startup_tests;
 
 #[cfg(test)]
 mod a11y_tests;
+#[cfg(test)]
+mod agent_tests;
 #[cfg(test)]
 mod async_dialog_tests;
 #[cfg(test)]
@@ -447,6 +450,17 @@ pub struct UiState {
     pub actions_rect: Option<egui::Rect>,
     /// The Variables editor, when open.
     pub variables: Option<variables_panel::Editor>,
+    /// The in-app Agent panel, open when this is set. Display state only: the runtime handle lives
+    /// in the app's host, and `ui.inspect` reports `AgentPanel::summary`.
+    pub agent: Option<agent::AgentPanel>,
+    /// The running turn's cancellation token, kept out of the serializable surface.
+    pub agent_running: agent::Running,
+    /// The provider settings, read once per frame so a change in Preferences is picked up.
+    pub agent_configured: bool,
+    /// The Agent's transcript for this file, read from the file and written back on save.
+    pub agent_transcript: figcraft_agent::history::Transcript,
+    /// Requests the Agent panel produced this frame, for the app to perform after the draw.
+    pub agent_requests: Vec<agent::Request>,
     pub about: bool,
     /// The tab the About window shows.
     pub about_tab: dialogs::AboutTab,
@@ -657,6 +671,11 @@ impl Default for UiState {
             context_menu_shown: false,
             actions_rect: None,
             variables: None,
+            agent: None,
+            agent_running: agent::Running::default(),
+            agent_configured: false,
+            agent_transcript: figcraft_agent::history::Transcript::default(),
+            agent_requests: Vec::new(),
             about: false,
             about_tab: dialogs::AboutTab::About,
             preferences: false,

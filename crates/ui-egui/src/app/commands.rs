@@ -1,3 +1,5 @@
+use crate::agent;
+
 use super::{
     Done, FigApp, LeftTab, MobilePanel, NodeId, PANEL_DEFAULT, RightTab, Value, comments, dev_compare, dialogs, home, import_report, json, layers,
     live, menus, missing_fonts, plugins_ui, present, tabs, updates_ui, versions,
@@ -129,6 +131,15 @@ impl FigApp {
                 "dialog.missingFonts" => missing_fonts::request(self),
                 "dialog.createFromColor" => crate::sampled_color::request(self, &r.data),
                 "panel.shortcuts" => self.ui.shortcuts_panel = !self.ui.shortcuts_panel,
+                // The in-app Agent panel: a toggle, so a keyboard shortcut or the palette can reach it.
+                "panel.agent" => match self.ui.agent.take() {
+                    Some(_) => {}
+                    None => {
+                        self.ui.agent = Some(agent::AgentPanel::new(agent::conversation_id(
+                            self.session.ds().map(|d| d.uid).unwrap_or(0),
+                        )));
+                    }
+                },
                 "palette.actions" => menus::toggle_palette(&mut self.ui),
                 "panel.design" if self.session.doc().is_ok_and(figcraft_engine::board::is_board) => self.ui.board_panel = !self.ui.board_panel,
                 "panel.design" => self.ui.right_tab = RightTab::Design,

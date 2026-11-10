@@ -239,6 +239,9 @@ icons! {
     Vote,
     /// A measurement: a dimension line with arrowheads between two end ticks.
     Measure,
+    /// The in-app Agent: a four-point spark, the usual mark for a generative assistant, drawn
+    /// here from scratch on the same 16-unit grid.
+    Agent,
 }
 
 /// Points along a circular arc from angle `a0` to `a1` (radians, y down: increasing is clockwise).

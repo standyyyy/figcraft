@@ -101,6 +101,10 @@ impl FigApp {
             "lastError": self.ui.last_error,
             "importReport": self.ui.import_report.as_ref().map(import_report::Report::inspect),
         });
+        // The Agent panel's stable summary: status and counts, never the transcript or a
+        // credential (see `AgentPanel::summary`). Added outside the `json!` literal so the macro
+        // does not nest one level deeper.
+        state["agent"] = self.ui.agent.as_ref().map(|p| p.summary()).unwrap_or(Value::Null);
         state["homeSearch"] = json!(self.ui.home_view.file_query);
         state["panels"]["minimized"] = json!(self.session.ds().is_ok_and(|d| d.view.ui_minimized));
         // Set apart from the literal above, which is at the macro recursion limit.

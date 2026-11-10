@@ -399,6 +399,7 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
     batch_rename_dialog(app, ctx);
     menu_input_dialog(app, ctx);
     crate::variables_panel::show(app, ctx);
+    crate::agent::show(app, ctx);
     crate::dev_compare::show(app, ctx);
     crate::branch_ui::show(app, ctx);
     if app.ui.export_preview {
@@ -411,6 +412,9 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
     crate::online::dialogs(app, ctx);
     crate::windows::confirm_close(app, ctx);
     crate::windows::confirm_close_tab(app, ctx);
+    // The Agent panel's requests are performed after every draw, so a model call or a save dialog
+    // never happens inside one.
+    crate::agent::perform_requests(app);
 }
 
 /// Preferences ▸ Interface size: a size relative to the system's display scale (100 % is the

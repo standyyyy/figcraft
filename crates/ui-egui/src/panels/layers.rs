@@ -101,7 +101,12 @@ pub fn rail(app: &mut FigApp, ui: &mut Ui) {
     ui.painter().line_segment([pos2(r.min.x + 18.0, y), pos2(r.max.x - 18.0, y)], Stroke::new(1.0, t.border));
     y += 12.0;
     let items =
-        [(Icon::Page, tr("File"), Some(LeftTab::File)), (Icon::Assets, tr("Assets"), Some(LeftTab::Assets)), (Icon::Styles, tr("Variables"), None)];
+        [
+            (Icon::Page, tr("File"), Some(LeftTab::File)),
+            (Icon::Assets, tr("Assets"), Some(LeftTab::Assets)),
+            (Icon::Styles, tr("Variables"), None),
+            (Icon::Agent, tr("Agent"), None),
+        ];
     for (icon, label, tab) in items {
         let ir = Rect::from_center_size(pos2(r.center().x, y + 18.0), vec2(40.0, 36.0));
         let hit = Rect::from_min_max(pos2(r.min.x, y), pos2(r.max.x, y + 56.0));
@@ -129,6 +134,10 @@ pub fn rail(app: &mut FigApp, ui: &mut Ui) {
                         app.ui.open_left_panel();
                     }
                     app.ui.versions = Default::default();
+                }
+                // The rail's last two entries open panels of their own; `label` says which.
+                None if label == tr("Agent") => {
+                    app.ui.agent.get_or_insert_with(|| crate::agent::AgentPanel::new("doc-0"));
                 }
                 None => {
                     app.ui.variables.get_or_insert_with(Default::default);

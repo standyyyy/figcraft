@@ -415,6 +415,8 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
     // The Agent panel's requests are performed after every draw, so a model call or a save dialog
     // never happens inside one.
     crate::agent::perform_requests(app);
+    // The worker's events, drained after the draw so a frame never waits on it.
+    crate::agent::poll_host(app);
 }
 
 /// Preferences ▸ Interface size: a size relative to the system's display scale (100 % is the

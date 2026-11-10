@@ -338,3 +338,182 @@ fn the_conversation_id_is_per_file() {
     assert_eq!(crate::agent::conversation_id(7), "doc-7");
     assert_ne!(crate::agent::conversation_id(7), crate::agent::conversation_id(8));
 }
+
+// ---------- Send actually starts a turn ----------
+
+/// A host that records what it was asked and emits a scripted turn.
+struct Scripted {
+    started: Vec<(u64, String)>,
+    events: Vec<figcraft_agent::run::AgentEvent>,
+    replay: Option<Vec<serde_json::Value>>,
+    status: crate::agent_host::HostStatus,
+}
+
+impl Scripted {
+    fn new() -> Self {
+        Self { started: Vec::new(), events: Vec::new(), replay: None, status: crate::agent_host::HostStatus::Idle }
+    }
+    /// The turn a test wants: started, one tool, committed with `replay`.
+    fn committing(replay: Vec<serde_json::Value>) -> Self {
+        Self { replay: Some(replay), ..Self::new() }
+    }
+}
+
+impl crate::agent_host::AgentHost for Scripted {
+    fn start(&mut self, request: crate::agent_host::HostRequest) -> figcraft_agent::run::CancelToken {
+        if let crate::agent_host::HostRequest::Start(req) = request {
+            self.started.push((req.turn, req.request.clone()));
+            let turn = req.turn;
+            self.events = vec![
+                figcraft_agent::run::AgentEvent::Started { turn },
+                figcraft_agent::run::AgentEvent::TextDelta { turn, text: "done".into() },
+                figcraft_agent::run::AgentEvent::Committed { turn, undo_label: "AI: x".into() },
+            ];
+            self.status = crate::agent_host::HostStatus::Idle;
+        }
+        figcraft_agent::run::CancelToken::new()
+    }
+    fn drain(&mut self) -> Vec<figcraft_agent::run::AgentEvent> {
+        std::mem::take(&mut self.events)
+    }
+    fn take_replay(&mut self) -> Option<Vec<serde_json::Value>> {
+        self.replay.take()
+    }
+    fn status(&self) -> crate::agent_host::HostStatus {
+        self.status
+    }
+    fn describe(&self) -> String {
+        "scripted".into()
+    }
+}
+
+/// A panel-only harness: the app fields `perform_requests` touches, without a window.
+///
+/// `provider`: whether the Agent's endpoint is configured, which decides whether Send can start a
+/// turn at all.
+fn harness_with(provider: bool) -> crate::FigApp {
+    let mut s = figcraft_engine::Session::new();
+    s.execute("file.new", &serde_json::json!({})).expect("file.new");
+    if provider {
+        s.prefs.agent = figcraft_engine::prefs::AgentPrefs {
+            enabled: true,
+            base_url: "http://127.0.0.1:8000".into(),
+            model: "test-model".into(),
+            ..figcraft_engine::prefs::AgentPrefs::default()
+        };
+    }
+    let mut app = crate::FigApp::new(s, Box::new(crate::NoServices));
+    app.ui.agent = Some(AgentPanel::new("doc-1"));
+    app
+}
+
+fn harness() -> crate::FigApp {
+    harness_with(false)
+}
+
+#[test]
+fn sending_starts_a_turn_on_the_host() {
+    // The gap this test closes: Send used to clear the draft and do nothing else, so the panel
+    // looked like it had sent while no turn was ever started.
+    let mut app = harness_with(true);
+    app.ui.agent_host = Some(Box::new(Scripted::new()));
+
+    app.ui.agent_requests.push(Request::Send { request: "draw a card".into() });
+    crate::agent::perform_requests(&mut app);
+
+    // The panel moved to streaming, and it did so because a turn was asked for.
+    let panel = app.ui.agent.as_ref().expect("panel");
+    assert!(panel.current.is_some(), "a turn was begun");
+    assert_eq!(panel.current.as_ref().map(|r| r.request.as_str()), Some("draw a card"));
+    assert_eq!(panel.status, RunStatus::Streaming);
+    assert!(app.ui.agent_turn > 0, "a turn number was allocated");
+}
+
+#[test]
+fn a_turn_with_no_provider_reports_a_readable_error_and_starts_nothing() {
+    // No provider configured: the panel says what to fix rather than clearing the draft silently.
+    let mut app = harness_with(false);
+    app.ui.agent_host = Some(Box::new(Scripted::new()));
+    app.ui.agent_requests.push(Request::Send { request: "draw".into() });
+    crate::agent::perform_requests(&mut app);
+
+    let panel = app.ui.agent.as_ref().expect("panel");
+    assert_eq!(panel.status, RunStatus::Failed);
+    let error = panel.error.as_deref().unwrap_or("");
+    assert!(error.contains("provider") || error.contains("Preferences") || error.contains("URL"), "got {error}");
+}
+
+#[test]
+fn a_build_without_a_host_says_so() {
+    let mut app = harness();
+    app.ui.agent_requests.push(Request::Send { request: "draw".into() });
+    crate::agent::perform_requests(&mut app);
+    let panel = app.ui.agent.as_ref().expect("panel");
+    assert_eq!(panel.status, RunStatus::Failed);
+    assert!(panel.error.as_deref().is_some_and(|e| e.contains("no Agent runtime")));
+}
+
+#[test]
+fn the_hosts_events_reach_the_panel_and_its_replay_commits() {
+    let mut app = harness_with(true);
+    let replay = vec![serde_json::json!({
+        "command": "node.create",
+        "params": {"type": "rectangle", "width": 10.0, "height": 10.0}
+    })];
+    app.ui.agent_host = Some(Box::new(Scripted::committing(replay)));
+    app.ui.agent_requests.push(Request::Send { request: "draw".into() });
+    crate::agent::perform_requests(&mut app);
+    let before = app.session.doc().expect("doc").nodes().count();
+
+    // The frame's second step: drain the events, then commit the replay.
+    crate::agent::poll_host(&mut app);
+
+    let panel = app.ui.agent.as_ref().expect("panel");
+    assert_eq!(panel.status, RunStatus::Done, "the turn finished");
+    assert_eq!(panel.current.as_ref().map(|r| r.answer.as_str()), Some("done"));
+    assert_eq!(panel.last_undo_label.as_deref(), Some("AI: draw"), "the undo step is named after the request");
+    assert_eq!(app.session.doc().expect("doc").nodes().count(), before + 1, "the replay landed");
+    assert_eq!(app.session.undo_depth().0, 1, "as exactly one undo step");
+}
+
+#[test]
+fn a_configured_provider_enables_the_send_button() {
+    // The bug this pins: `agent_configured` was initialized to false and never updated, so the Send
+    // button stayed disabled however the provider was set, and clicking it did nothing.
+    let mut app = harness_with(true);
+    let _ = crate::agent::panel_input(&mut app);
+    assert!(app.ui.agent_configured, "a valid provider must enable the panel");
+}
+
+#[test]
+fn an_unconfigured_or_invalid_provider_leaves_the_button_disabled() {
+    // No provider at all.
+    let mut app = harness_with(false);
+    let _ = crate::agent::panel_input(&mut app);
+    assert!(!app.ui.agent_configured, "nothing configured: the button stays disabled");
+
+    // A provider that is enabled but unusable (https is refused, see `config`).
+    let mut app = harness_with(false);
+    app.session.prefs.agent = figcraft_engine::prefs::AgentPrefs {
+        enabled: true,
+        base_url: "https://example.com/v1".into(),
+        model: "m".into(),
+        ..figcraft_engine::prefs::AgentPrefs::default()
+    };
+    let _ = crate::agent::panel_input(&mut app);
+    assert!(!app.ui.agent_configured, "an unusable provider does not enable the button");
+}
+
+#[test]
+fn the_snapshot_is_a_document_the_worker_can_rebuild() {
+    // The bug this pins: the snapshot used `inspect_document`'s output, which is a report for a
+    // model (paths, history, a dirty flag), not a document. The worker's `serde_json::from_value`
+    // then failed and every turn reported a failure with no tool calls.
+    let mut app = harness_with(true);
+    app.session.execute("node.create", &serde_json::json!({"type": "rectangle", "width": 10.0, "height": 10.0})).expect("create");
+    let snapshot = crate::agent::document_snapshot(&mut app).expect("a snapshot");
+    let doc: figcraft_doc::Document = serde_json::from_value(snapshot.document).expect("the snapshot rebuilds into a document");
+    assert_eq!(doc.nodes().count(), app.session.doc().expect("doc").nodes().count(), "every layer came along");
+    assert!(snapshot.uid > 0, "it names the file");
+    assert!(snapshot.revision > 0, "and the revision the commit checks");
+}

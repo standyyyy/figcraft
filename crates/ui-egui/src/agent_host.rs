@@ -51,8 +51,9 @@ impl TurnOutcome {
 /// Where a snapshot came from: the document, page and selection the Agent may look at.
 #[derive(Clone, Debug)]
 pub struct Snapshot {
-    /// The open document as JSON, exactly as `inspect_document` would report it, so a host can build
-    /// its shadow from it without touching a `Session`.
+    /// The open document as the format crate writes it: the same JSON a `.figcraft` file's
+    /// `document.json` holds, so a host can rebuild a `Document` from it without touching a
+    /// `Session`. (Not `inspect_document`'s output: that is a report for a model, not a document.)
     pub document: Value,
     /// The document's uid, so the commit lands in the file the Agent inspected.
     pub uid: u64,

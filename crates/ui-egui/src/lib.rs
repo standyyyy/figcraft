@@ -473,6 +473,11 @@ pub struct UiState {
     pub agent_transcript: figcraft_agent::history::Transcript,
     /// Requests the Agent panel produced this frame, for the app to perform after the draw.
     pub agent_requests: Vec<agent::Request>,
+    /// The platform's way to run a turn. `None` until the app sets one, so a build without a runtime
+    /// keeps working and the panel says so.
+    pub agent_host: Option<Box<dyn agent_host::AgentHost>>,
+    /// The turn the panel is showing; the host's events carry it.
+    pub agent_turn: u64,
     pub about: bool,
     /// The tab the About window shows.
     pub about_tab: dialogs::AboutTab,
@@ -688,6 +693,8 @@ impl Default for UiState {
             agent_configured: false,
             agent_transcript: figcraft_agent::history::Transcript::default(),
             agent_requests: Vec::new(),
+            agent_host: None,
+            agent_turn: 0,
             about: false,
             about_tab: dialogs::AboutTab::About,
             preferences: false,

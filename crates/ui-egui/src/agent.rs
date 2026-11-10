@@ -962,9 +962,132 @@ pub fn show(app: &mut crate::FigApp, ctx: &egui::Context) {
     }
 }
 
+/// Start a turn: snapshot the document, ask the host to run it, and remember the token.
+///
+/// The snapshot is what the worker may look at. It carries the document as JSON, its uid and its
+/// revision, so the host never borrows the live `Session` and the commit can be refused if the
+/// document changed while the Agent worked.
+fn start_turn(app: &mut crate::FigApp, request: &str) {
+    if app.ui.agent_host.is_none() {
+        set_error(app, "this build has no Agent runtime");
+        return;
+    }
+    // A turn already running is not replaced: the panel's Send is disabled then, but a queued
+    // request or a keystroke could still arrive.
+    if app.ui.agent_host.as_ref().is_some_and(|h| h.status() == crate::agent_host::HostStatus::Running) {
+        return;
+    }
+    // The snapshot and the config are read before the host is borrowed: both need the session.
+    let snapshot = match document_snapshot(app) {
+        Ok(s) => s,
+        Err(message) => {
+            set_error(app, &message);
+            return;
+        }
+    };
+    // The provider settings come from the engine's preferences, which is where the user set them.
+    let prefs = &app.session.prefs.agent;
+    let config = match figcraft_agent::AgentConfig::from_prefs(prefs) {
+        Ok(c) => c,
+        Err(e) => {
+            set_error(app, &format!("{e} {}", figcraft_agent::AgentErrorKind::Configuration.action()));
+            return;
+        }
+    };
+    app.ui.agent_turn = app.ui.agent_turn.wrapping_add(1);
+    let turn = app.ui.agent_turn;
+    if let Some(panel) = app.ui.agent.as_mut() {
+        panel.begin_turn(turn, request);
+    }
+    let host = match app.ui.agent_host.as_mut() {
+        Some(h) => h,
+        None => return,
+    };
+    let token = host.start(crate::agent_host::HostRequest::Start(Box::new(crate::agent_host::TurnRequest {
+        turn,
+        request: request.to_string(),
+        snapshot,
+        limits: figcraft_agent::run::Limits::default(),
+        config,
+    })));
+    app.ui.agent_running.token = Some(token);
+}
+
+/// The live document as a snapshot the worker can build its shadow from.
+pub(crate) fn document_snapshot(app: &mut crate::FigApp) -> Result<crate::agent_host::Snapshot, String> {
+    let ds = app.session.ds().map_err(|e| e.to_string())?;
+    let (uid, revision) = (ds.uid, ds.revision);
+    // The document itself, in the shape the format crate writes: a host rebuilds a `Document` from
+    // it. `inspect_document` would not do: its output is a report for a model (paths, history, a
+    // dirty flag), not a document, and deserializing it back into one fails.
+    let document = figcraft_format::to_json(ds.doc.as_ref()).map_err(|e| e.to_string())?;
+    Ok(crate::agent_host::Snapshot { document, uid, revision })
+}
+
+fn set_error(app: &mut crate::FigApp, message: &str) {
+    if let Some(panel) = app.ui.agent.as_mut() {
+        panel.status = RunStatus::Failed;
+        panel.error = Some(message.to_string());
+    }
+}
+
+/// Drain the host's events into the panel, once per frame.
+///
+/// Called after the draw, so a frame never waits on the worker. When a turn commits, its replay is
+/// applied here, on the UI thread, which is the only thread that touches the live document.
+pub fn poll_host(app: &mut crate::FigApp) {
+    let Some(host) = app.ui.agent_host.as_mut() else { return };
+    let events = host.drain();
+    if events.is_empty() {
+        return;
+    }
+    let limits = figcraft_agent::run::Limits::default();
+    for event in &events {
+        if let Some(panel) = app.ui.agent.as_mut() {
+            panel.apply(event, &limits);
+        }
+    }
+    // The terminal event ends the turn: take the replay and commit it.
+    if events.iter().any(figcraft_agent::run::AgentEvent::is_terminal) {
+        app.ui.agent_running.finish();
+        if let Some(replay) = host.take_replay() {
+            commit_replay(app, replay);
+        }
+    }
+}
+
+/// Commit a finished turn's replay as one undo step.
+///
+/// The replay is a list of canonical commands; `command.batch` applies them together, so the turn is
+/// one entry in the undo history and a failure rolls the whole thing back.
+fn commit_replay(app: &mut crate::FigApp, replay: Vec<serde_json::Value>) {
+    if replay.is_empty() {
+        return;
+    }
+    let label = app
+        .ui
+        .agent
+        .as_ref()
+        .and_then(|p| p.current.as_ref())
+        .map(|r| figcraft_agent::shadow::undo_label(&r.request))
+        .unwrap_or_else(|| "AI: change".to_string());
+    let batch = serde_json::json!({ "label": label, "commands": replay });
+    match app.session.execute("command.batch", &batch) {
+        Ok(_) => {
+            if let Some(panel) = app.ui.agent.as_mut() {
+                panel.last_undo_label = Some(label);
+            }
+        }
+        Err(e) => set_error(app, &format!("the Agent's changes could not be applied: {e}")),
+    }
+}
+
 /// Read the panel's inputs: whether a provider is configured, the requirements list and the chat.
-fn panel_input(app: &mut crate::FigApp) -> PanelInput {
-    let configured = app.ui.agent_configured;
+pub(crate) fn panel_input(app: &mut crate::FigApp) -> PanelInput {
+    // Whether the provider is usable, read from preferences every frame so a change in Preferences
+    // takes effect at once. The stored flag is kept in step for the rest of the app to read.
+    let configured = figcraft_agent::AgentConfig::from_prefs(&app.session.prefs.agent).is_ok();
+    app.ui.agent_configured = configured;
     // The list comes from the command that owns requirements, so the panel and MCP agree.
     let requirements = match app.session.execute("requirements.list", &serde_json::json!({})) {
         Ok(v) => RequirementsList::from_result(&v),
@@ -1040,8 +1163,15 @@ pub fn perform_requests(app: &mut crate::FigApp) {
                     }
                 }
             },
-            // Send and Retry are the host's: they start a turn, which Task 10's runtime performs.
-            Request::Send { .. } | Request::Retry | Request::CloseRequirements => {}
+            Request::Send { request } => start_turn(app, &request),
+            Request::Retry => {
+                // Rerun the last request: the panel kept it in the run it is showing.
+                let request = app.ui.agent.as_ref().and_then(|p| p.current.as_ref()).map(|r| r.request.clone());
+                if let Some(request) = request {
+                    start_turn(app, &request);
+                }
+            }
+            Request::CloseRequirements => {}
         }
     }
 }

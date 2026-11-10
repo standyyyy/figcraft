@@ -1,7 +1,9 @@
 //! Preferences: the Agent provider settings are plain data, never serialized into a document, and
 //! never print a credential.
 
-use crate::Document;
+use crate::{Document, Session};
+use serde_json::json;
+
 use crate::prefs::*;
 
 #[test]
@@ -98,4 +100,36 @@ fn the_timeout_bounds_are_sane() {
     assert!(min < default, "the default sits inside the accepted range");
     assert!(default < max);
     assert_eq!((min, max), (5, 600), "the accepted range is what the UI offers");
+}
+
+#[test]
+fn the_agent_provider_can_be_set_by_command() {
+    // Without this, a person cannot configure the Agent at all: the panel's Send would fail with a
+    // configuration error and no way to fix it from inside the app.
+    let mut s = Session::new();
+    s.execute("file.new", &json!({})).expect("file.new");
+    let out = s
+        .execute("pref.agent", &json!({"enabled": true, "baseUrl": "http://127.0.0.1:8000", "model": "m", "timeoutSeconds": 60}))
+        .expect("pref.agent");
+    assert_eq!(out["enabled"], true);
+    assert_eq!(out["model"], "m");
+    assert_eq!(s.prefs.agent.base_url, "http://127.0.0.1:8000");
+    assert_eq!(s.prefs.agent.timeout_seconds, 60);
+    // The status reports whether a credential is set, never what it is.
+    assert_eq!(out["hasCredential"], false);
+    assert!(out.get("credential").is_none(), "the credential never comes back: {out}");
+}
+
+#[test]
+fn setting_a_credential_reports_only_that_one_is_set() {
+    let mut s = Session::new();
+    s.execute("file.new", &json!({})).expect("file.new");
+    let out = s.execute("pref.agent", &json!({"credential": "MY_KEY_VAR"})).expect("pref.agent");
+    assert_eq!(out["hasCredential"], true);
+    assert_eq!(s.prefs.agent.credential.as_deref(), Some("MY_KEY_VAR"), "the name is stored");
+    let printed = format!("{out}");
+    assert!(!printed.contains("MY_KEY_VAR"), "the variable name is not echoed: {printed}");
+    // Clearing it works too.
+    s.execute("pref.agent", &json!({"credential": ""})).expect("clear");
+    assert_eq!(s.prefs.agent.credential, None);
 }

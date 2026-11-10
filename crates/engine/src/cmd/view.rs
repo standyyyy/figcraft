@@ -444,6 +444,34 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         spec!("pref.uiScaleReset", "Default interface size", "{}  back to the system's own size (1) → {scale}", false, |s, _| ui_scale_step(s, 0)),
         spec!("pref.autoSave", "Save files automatically", "{on?}", false, |s, p| pref(s, p, |x| &mut x.auto_save)),
+        // The in-app Agent's provider. The credential is stored as the NAME of the variable that
+        // holds it, never the key: a preferences file that gets copied or committed cannot leak it.
+        spec!("pref.agent", "Agent provider", "{enabled?, baseUrl?, model?, credential?, timeoutSeconds?}", false, |s, p| {
+            let a = &mut s.prefs.agent;
+            if let Some(v) = get(p, "enabled").and_then(Value::as_bool) {
+                a.enabled = v;
+            }
+            if let Some(v) = get(p, "baseUrl").and_then(Value::as_str) {
+                a.base_url = v.to_string();
+            }
+            if let Some(v) = get(p, "model").and_then(Value::as_str) {
+                a.model = v.to_string();
+            }
+            if let Some(v) = get(p, "credential") {
+                a.credential = v.as_str().filter(|s| !s.trim().is_empty()).map(str::to_string);
+            }
+            if let Some(v) = get(p, "timeoutSeconds").and_then(Value::as_u64) {
+                a.timeout_seconds = u32::try_from(v).unwrap_or(crate::prefs::DEFAULT_AGENT_TIMEOUT_SECONDS);
+            }
+            // Report the state without the credential: a status is not a place for it.
+            Ok(json!({
+                "enabled": a.enabled,
+                "baseUrl": a.base_url,
+                "model": a.model,
+                "hasCredential": a.credential.is_some(),
+                "timeoutSeconds": a.timeout_seconds,
+            }))
+        }),
         spec!("pref.startOnHome", "Start on the Home screen", "{on?}", false, |s, p| pref(s, p, |x| &mut x.start_on_home)),
         spec!("pref.nudge", "Nudge amount", "{small?, big?}", false, |s, p| {
             s.prefs.nudge_small = num(p, "small").unwrap_or(s.prefs.nudge_small).clamp(0.01, 1000.0);

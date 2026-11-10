@@ -247,8 +247,9 @@ fn run_turn(
         }
     };
 
-    // The credential is resolved on this thread and dropped with the agent: it never reaches the UI.
-    let credential = credential_for(config);
+    // The key is resolved on this thread and dropped with the client. On the desktop the persisted
+    // reference is an environment-variable name; nothing here stores or forwards a key.
+    let credentials = figcraft_agent::EnvironmentCredentials;
     let mut emit = |event: AgentEvent| push_event(events, event);
     let terminal = figcraft_agent::runtime::run(
         figcraft_agent::runtime::Turn {
@@ -262,7 +263,7 @@ fn run_turn(
             history: history.to_vec(),
         },
         shadow,
-        credential.as_deref(),
+        &credentials,
         &mut emit,
     );
 
@@ -299,12 +300,4 @@ fn push_event(events: &Arc<Mutex<Vec<AgentEvent>>>, event: AgentEvent) {
     if let Ok(mut e) = events.lock() {
         e.push(event);
     }
-}
-
-/// The credential a turn may use, resolved from the environment by the name in the config.
-///
-/// Read on the worker thread, handed to the runtime, and dropped when the turn ends: it never
-/// reaches the UI thread, a panel, or a transcript.
-fn credential_for(config: &AgentConfig) -> Option<String> {
-    config.credential().and_then(|name| std::env::var(name).ok()).filter(|v| !v.is_empty())
 }

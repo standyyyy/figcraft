@@ -21,6 +21,11 @@ impl ProviderError {
     pub fn new(kind: AgentErrorKind, message: impl Into<String>) -> Self {
         Self { kind, message: message.into() }
     }
+
+    /// A credential that cannot be resolved: a configuration problem the person can fix.
+    pub fn credential(message: impl Into<String>) -> Self {
+        Self { kind: AgentErrorKind::Configuration, message: message.into() }
+    }
 }
 
 impl std::fmt::Display for ProviderError {
@@ -33,17 +38,116 @@ impl std::error::Error for ProviderError {}
 
 /// What reads a credential: a name in the environment, resolved on use.
 pub trait Credentials {
-    /// The secret `name` holds, or `None`.
-    fn resolve(&self, name: &str) -> Option<String>;
+    /// The secret the persisted reference names, or `None` when there is none.
+    ///
+    /// The reference is what a preferences file may hold: a variable's *name*, never a key. Where the
+    /// key actually lives is the host's business -- the process environment on the desktop, app memory
+    /// in a browser -- and the gateway never decides it.
+    fn resolve(&self, reference: Option<&str>) -> Result<Option<Secret>, ProviderError>;
 }
 
-/// Reads credentials from the process environment.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Environment;
+/// A provider key, in a type that cannot be printed by accident.
+///
+/// `Debug` prints `<redacted>`: a key must never reach a log, a transcript, a panel, an error message
+/// or a `.figcraft` file, and the surest way is for no formatting of it to contain it.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Secret(String);
 
-impl Credentials for Environment {
-    fn resolve(&self, name: &str) -> Option<String> {
-        std::env::var(name).ok().filter(|v| !v.trim().is_empty())
+impl Secret {
+    /// Wrap a key.
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    /// The key itself, for the one place that needs it: building an authorization header.
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+
+    /// Whether it holds anything but whitespace.
+    pub fn is_set(&self) -> bool {
+        !self.0.trim().is_empty()
+    }
+}
+
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Deliberately not the value, and not its length either: a length narrows a guess.
+        f.write_str("Secret(<redacted>)")
+    }
+}
+
+impl std::fmt::Display for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("<redacted>")
+    }
+}
+
+/// Reads credentials from the process environment: the reference is a variable's name.
+///
+/// The desktop ships no key of its own and stores none; a preferences file holds the name, and the
+/// value lives wherever the person put it.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct EnvironmentCredentials;
+
+impl Credentials for EnvironmentCredentials {
+    fn resolve(&self, reference: Option<&str>) -> Result<Option<Secret>, ProviderError> {
+        let Some(name) = reference.filter(|n| !n.trim().is_empty()) else { return Ok(None) };
+        // A name that is not a plausible environment variable is a configuration mistake, not a
+        // missing key: say which, so the message is actionable.
+        if name.contains('=') || name.contains('\0') {
+            return Err(ProviderError::credential("the credential name is not a valid variable name"));
+        }
+        match std::env::var(name) {
+            Ok(v) if !v.trim().is_empty() => Ok(Some(Secret::new(v))),
+            // Set but empty reads as unset: an empty key is not a key.
+            Ok(_) => Ok(None),
+            Err(std::env::VarError::NotPresent) => Ok(None),
+            // Present but not UTF-8: cannot be sent, and saying so beats sending a mangled key.
+            Err(std::env::VarError::NotUnicode(_)) => Err(ProviderError::credential(format!("`{name}` is not valid UTF-8"))),
+        }
+    }
+}
+
+/// Keeps the key in this process's memory only, for a platform with no environment to read.
+///
+/// The persisted reference is the reserved logical name [`SESSION_REFERENCE`]; a reload keeps the
+/// endpoint and model and asks for the key again. Nothing here writes to storage.
+#[derive(Clone, Debug, Default)]
+pub struct SessionCredentials {
+    key: Option<Secret>,
+}
+
+/// The reference [`SessionCredentials`] recognises. Not a variable name: it says where the key is.
+pub const SESSION_REFERENCE: &str = "browser-session";
+
+impl SessionCredentials {
+    /// Hold `key` for this session.
+    pub fn set(&mut self, key: impl Into<String>) {
+        let key = Secret::new(key);
+        self.key = if key.is_set() { Some(key) } else { None };
+    }
+
+    /// Forget the key.
+    pub fn clear(&mut self) {
+        self.key = None;
+    }
+
+    /// Whether a key is held.
+    pub fn is_set(&self) -> bool {
+        self.key.is_some()
+    }
+}
+
+impl Credentials for SessionCredentials {
+    fn resolve(&self, reference: Option<&str>) -> Result<Option<Secret>, ProviderError> {
+        match reference {
+            // No reference at all: an endpoint that needs no key.
+            None => Ok(None),
+            Some(r) if r.trim().is_empty() => Ok(None),
+            Some(SESSION_REFERENCE) => Ok(self.key.clone()),
+            Some(other) => Err(ProviderError::credential(format!("`{other}` is not a credential this platform can read"))),
+        }
     }
 }
 
@@ -71,12 +175,17 @@ impl ModelGateway {
     /// An endpoint that needs no credential is allowed: a local vLLM often runs without one, and
     /// refusing that case would make the common local setup impossible.
     pub fn build(config: &AgentConfig, credentials: &dyn Credentials) -> Result<Self, ProviderError> {
-        let key = match config.credential() {
-            Some(name) => credentials
-                .resolve(name)
-                .ok_or_else(|| ProviderError::new(AgentErrorKind::Authentication, format!("no credential named `{name}` is set")))?,
-            // Rig needs some key to build a client; a local server ignores it.
-            None => String::new(),
+        // The reference is a name; where the key lives is the host's business. A reference that is
+        // set but resolves to nothing is a configuration error, because the person asked for a key
+        // and the endpoint will refuse the request without one.
+        let key = match credentials.resolve(config.credential())? {
+            Some(secret) => secret.expose().to_string(),
+            // No reference: an endpoint that needs no credential, which a local vLLM often is.
+            None if config.credential().is_none() => String::new(),
+            None => {
+                let name = config.credential().unwrap_or_default();
+                return Err(ProviderError::new(AgentErrorKind::Authentication, format!("no credential named `{name}` is set")));
+            }
         };
         let openai = OpenAIConfig::new(key).with_base_url(config.base_url());
         let client = openai.client();

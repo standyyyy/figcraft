@@ -20,6 +20,7 @@ use figcraft_agent::TurnTerminal;
 use figcraft_agent::run::{AgentEvent, CancelToken, Limits};
 use figcraft_agent::runtime::{Turn, run};
 use figcraft_agent::shadow::Shadow;
+use figcraft_agent::{SESSION_REFERENCE, SessionCredentials};
 use serde_json::json;
 
 /// The endpoint and model from the environment, or `None` when not configured.
@@ -32,7 +33,9 @@ fn live_config() -> Option<(AgentConfig, Option<String>)> {
         enabled: true,
         base_url: base,
         model,
-        credential: key_name,
+        // The key is held in memory for this process, so the config names the session reference
+        // rather than a variable -- the same way a browser build works.
+        credential: credential.as_ref().map(|_| SESSION_REFERENCE.to_string()),
         timeout_seconds: 120,
         ..figcraft_engine::prefs::AgentPrefs::default()
     };
@@ -43,6 +46,17 @@ fn live_config() -> Option<(AgentConfig, Option<String>)> {
 /// A shadow of `session`'s document, as the app builds one for each turn.
 fn shadow_of(session: &figcraft_engine::Session) -> Shadow {
     Shadow::capture(session).expect("capture")
+}
+
+/// A credential holder for a live endpoint: the key from the environment, or none.
+///
+/// Uses the same contract the app does, so a live run exercises the path a real turn takes.
+fn live_credentials(key: &Option<String>) -> SessionCredentials {
+    let mut credentials = SessionCredentials::default();
+    if let Some(k) = key {
+        credentials.set(k.clone());
+    }
+    credentials
 }
 
 /// A disposable synthetic document, as a shadow the turn edits.
@@ -64,7 +78,8 @@ fn a_streamed_answer_arrives_through_rig() {
         return;
     };
     let mut events = Vec::new();
-    let terminal = run(turn(config.clone(), "Reply with exactly: OK", CancelToken::new()), shadow(), credential.as_deref(), &mut |e| events.push(e));
+    let terminal =
+        run(turn(config.clone(), "Reply with exactly: OK", CancelToken::new()), shadow(), &live_credentials(&credential), &mut |e| events.push(e));
 
     // Rig streams: the answer must arrive as one or more deltas, not only in the final response.
     let deltas: Vec<&str> = events
@@ -97,7 +112,7 @@ fn a_model_calls_the_canvas_tool_and_the_edit_replays() {
     let terminal = run(
         turn(config, "Create a rectangle 100 wide and 60 tall at 10,10 in the design.", CancelToken::new()),
         shadow(),
-        credential.as_deref(),
+        &live_credentials(&credential),
         &mut |e| events.push(e),
     );
 
@@ -135,7 +150,7 @@ fn cancelling_mid_turn_commits_nothing() {
     // Cancelled before the first poll: the strongest form of "no late result may commit".
     let cancel = CancelToken::new();
     cancel.cancel();
-    let terminal = run(turn(config, "Create a very large layout with forty layers.", cancel), shadow(), credential.as_deref(), &mut |_| {});
+    let terminal = run(turn(config, "Create a very large layout with forty layers.", cancel), shadow(), &live_credentials(&credential), &mut |_| {});
     assert!(terminal.commit().is_none(), "a cancelled turn carries no envelope");
     assert!(matches!(terminal, TurnTerminal::Cancelled { .. }), "got {terminal:?}");
     println!("live: cancellation committed nothing");
@@ -159,7 +174,7 @@ fn a_follow_up_turn_continues_the_previous_one() {
     let first = run(
         turn(config.clone(), "Create a rectangle 20 wide and 20 tall at 0,0.", CancelToken::new()),
         shadow_of(&session),
-        credential.as_deref(),
+        &live_credentials(&credential),
         &mut |e| first_events.push(e),
     );
     let (continuation, replay) = match &first {
@@ -180,7 +195,7 @@ fn a_follow_up_turn_continues_the_previous_one() {
     let mut t = turn(config, "How many layers did you create? Answer with the number only.", CancelToken::new());
     t.history = continuation.clone();
     let mut second_events = Vec::new();
-    let second = run(t, shadow_of(&session), credential.as_deref(), &mut |e| second_events.push(e));
+    let second = run(t, shadow_of(&session), &live_credentials(&credential), &mut |e| second_events.push(e));
     match &second {
         TurnTerminal::Success { answer, .. } => {
             let shown: String = answer.chars().take(120).collect();
@@ -200,7 +215,7 @@ fn a_stored_continuation_round_trips_through_json() {
         return;
     };
     let mut events = Vec::new();
-    let first = run(turn(config.clone(), "Say exactly: OK", CancelToken::new()), shadow(), credential.as_deref(), &mut |e| events.push(e));
+    let first = run(turn(config.clone(), "Say exactly: OK", CancelToken::new()), shadow(), &live_credentials(&credential), &mut |e| events.push(e));
     let continuation = match &first {
         TurnTerminal::Success { continuation, .. } => continuation.clone(),
         other => panic!("expected a success, got {other:?}"),

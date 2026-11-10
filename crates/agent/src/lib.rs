@@ -41,7 +41,7 @@ mod run_tests;
 mod tools_tests;
 
 pub use config::{AgentConfig, ConfigError, Route};
-pub use gateway::{Credentials, Environment, ModelGateway, ProviderError};
+pub use gateway::{Credentials, EnvironmentCredentials, ModelGateway, ProviderError, SESSION_REFERENCE, Secret, SessionCredentials};
 pub use run::{AgentEvent, AgentRun, CancelToken, Limits, Outcome, RetryPolicy, ToolCall};
 pub use runtime::Turn as AgentTurn;
 pub use terminal::{CommitEnvelope, TurnProgress, TurnTerminal};

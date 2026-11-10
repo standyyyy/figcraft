@@ -58,7 +58,7 @@ pub struct Turn {
 /// The returned [`TurnTerminal`] is the only thing a caller may act on, and only its success variant
 /// can hold a [`CommitEnvelope`]. Every other ending drops the shadow: nothing the turn built can
 /// reach the document.
-pub fn run(turn: Turn, shadow: Shadow, credential: Option<&str>, emit: &mut dyn FnMut(AgentEvent)) -> TurnTerminal {
+pub fn run(turn: Turn, shadow: Shadow, credentials: &dyn crate::Credentials, emit: &mut dyn FnMut(AgentEvent)) -> TurnTerminal {
     let turn_no = turn.turn;
     if turn.cancel.is_cancelled() {
         return TurnTerminal::Cancelled { turn: turn_no };
@@ -66,7 +66,18 @@ pub fn run(turn: Turn, shadow: Shadow, credential: Option<&str>, emit: &mut dyn 
 
     // Rig's agent, with the shared catalog's tools. `preamble` is FigCraft's system prompt: it is part
     // of the behaviour (build first, do not narrate reasoning), and Rig sends it ahead of the chat.
-    let openai = OpenAIConfig::new(credential.unwrap_or("")).with_base_url(turn.config.base_url());
+    // The key is resolved here, at the one place a request is built, and dropped with the client.
+    // A reference that cannot be resolved fails the turn as a configuration problem rather than
+    // sending a request the provider will refuse.
+    let credential = match credentials.resolve(turn.config.credential()) {
+        Ok(s) => s,
+        Err(e) => return TurnTerminal::Failed { turn: turn_no, kind: e.kind, message: e.message },
+    };
+    if credential.is_none() && turn.config.credential().is_some() {
+        let name = turn.config.credential().unwrap_or_default();
+        return TurnTerminal::Failed { turn: turn_no, kind: AgentErrorKind::Authentication, message: format!("no credential named `{name}` is set") };
+    }
+    let openai = OpenAIConfig::new(credential.as_ref().map_or("", crate::Secret::expose)).with_base_url(turn.config.base_url());
     let model = openai.client().chat(turn.config.model().to_string());
     let tools = ShadowTools::new(shadow, ToolPolicy::EmbeddedAgent);
     let dynamic = tools.definitions();

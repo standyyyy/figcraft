@@ -3,8 +3,9 @@
 use figcraft_engine::prefs::{AgentPrefs, DEFAULT_AGENT_TIMEOUT_SECONDS};
 
 use crate::AgentErrorKind;
+use crate::ProviderError;
 use crate::config::{AgentConfig, ConfigError};
-use crate::gateway::{Credentials, Environment, ModelGateway, classify_http};
+use crate::gateway::{Credentials, EnvironmentCredentials, ModelGateway, SESSION_REFERENCE, Secret, SessionCredentials, classify_http};
 
 fn prefs(base_url: &str, model: &str) -> AgentPrefs {
     AgentPrefs { enabled: true, base_url: base_url.into(), model: model.into(), ..AgentPrefs::default() }
@@ -107,8 +108,8 @@ fn the_credential_reference_is_redacted_in_debug() {
 fn an_unknown_credential_name_fails_with_authentication() {
     struct Nothing;
     impl Credentials for Nothing {
-        fn resolve(&self, _name: &str) -> Option<String> {
-            None
+        fn resolve(&self, _reference: Option<&str>) -> Result<Option<Secret>, ProviderError> {
+            Ok(None)
         }
     }
     let mut p = prefs("http://x:1", "m");
@@ -123,7 +124,7 @@ fn an_unknown_credential_name_fails_with_authentication() {
 fn an_endpoint_that_needs_no_credential_builds() {
     // A local vLLM often runs without one; refusing that would break the common setup.
     let c = AgentConfig::from_prefs(&prefs("http://127.0.0.1:8000", "Qwen3")).expect("valid");
-    let g = ModelGateway::build(&c, &Environment).expect("builds without a credential");
+    let g = ModelGateway::build(&c, &EnvironmentCredentials).expect("builds without a credential");
     assert_eq!(g.model_name(), "Qwen3");
     assert_eq!(g.timeout_seconds(), DEFAULT_AGENT_TIMEOUT_SECONDS);
 }
@@ -134,8 +135,8 @@ fn a_configured_credential_builds_through_the_resolver() {
     // resolver exercises the same path a real one takes.
     struct Fixed;
     impl Credentials for Fixed {
-        fn resolve(&self, name: &str) -> Option<String> {
-            (name == "FIGCRAFT_AGENT_TEST_KEY").then(|| "test-value".to_string())
+        fn resolve(&self, reference: Option<&str>) -> Result<Option<Secret>, ProviderError> {
+            Ok((reference == Some("FIGCRAFT_AGENT_TEST_KEY")).then(|| Secret::new("test-value")))
         }
     }
     let mut p = prefs("http://x:1", "m");
@@ -152,7 +153,7 @@ fn a_server_alias_is_accepted_without_validation() {
     // A provider may answer under a different name (an alias, a quantised variant): the model name is
     // opaque, so nothing rejects it.
     let c = AgentConfig::from_prefs(&prefs("http://x:1", "DeepSeek-V4.1-Flash-1017")).expect("valid");
-    let g = ModelGateway::build(&c, &Environment).expect("builds");
+    let g = ModelGateway::build(&c, &EnvironmentCredentials).expect("builds");
     g.accept_alias(Some("qwen3-235b-a22b-instruct-2507"));
     g.accept_alias(None);
     assert_eq!(g.model_name(), "DeepSeek-V4.1-Flash-1017", "the configured name is unchanged");
@@ -205,4 +206,104 @@ fn the_url_is_the_normalized_base_plus_the_route() {
     let c = AgentConfig::from_prefs(&prefs("http://127.0.0.1:8000/v1/", "m")).expect("valid");
     assert_eq!(c.base_url(), "http://127.0.0.1:8000/v1");
     assert_eq!(format!("{}/{}", c.base_url(), c.route().path()), "http://127.0.0.1:8000/v1/chat/completions");
+}
+
+// ---------- the credential contract ----------
+
+#[test]
+fn a_secret_never_prints_its_value() {
+    // The whole point of the wrapper: a key must not reach a log, a transcript, an error or a file by
+    // being formatted. Neither `Debug` nor `Display` may contain it, and not its length either.
+    let secret = Secret::new("sk-super-secret-value-1234");
+    let debug = format!("{secret:?}");
+    let display = format!("{secret}");
+    for text in [&debug, &display] {
+        assert!(!text.contains("sk-super-secret"), "the key leaked: {text}");
+        assert!(!text.contains("1234"), "part of the key leaked: {text}");
+        assert!(!text.contains("26"), "the length leaked: {text}");
+    }
+    assert_eq!(debug, "Secret(<redacted>)");
+    assert_eq!(display, "<redacted>");
+    // The one place that needs it can get it.
+    assert_eq!(secret.expose(), "sk-super-secret-value-1234");
+}
+
+#[test]
+fn the_environment_resolves_a_reference_by_name() {
+    // The desktop stores a variable's name and reads the value only when building a request. This
+    // asks the real implementation about a variable the process does have -- one cargo sets for
+    // every build -- rather than mutating the environment, which needs `unsafe` and would make this
+    // test race every other one in the process.
+    let credentials = EnvironmentCredentials;
+    let path = std::env::var("PATH").expect("the test process has a PATH");
+    let resolved = credentials.resolve(Some("PATH")).expect("resolves").expect("a secret");
+    assert_eq!(resolved.expose(), path, "the value is the variable's");
+}
+
+#[test]
+fn a_reference_that_is_not_set_resolves_to_nothing() {
+    let credentials = EnvironmentCredentials;
+    assert!(credentials.resolve(Some("FIGCRAFT_DEFINITELY_NOT_SET_12345")).expect("no error").is_none());
+    assert!(credentials.resolve(None).expect("no error").is_none(), "no reference is no key");
+    assert!(credentials.resolve(Some("   ")).expect("no error").is_none(), "blank is no reference");
+}
+
+#[test]
+fn an_empty_environment_variable_reads_as_unset() {
+    // Set but empty is not a key: sending one would fail at the provider with a vaguer message.
+    // `FIGCRAFT_TEST_EMPTY` is set to whitespace by this test's environment where present; either way
+    // the contract is that a blank value is no credential.
+    let credentials = EnvironmentCredentials;
+    for name in ["FIGCRAFT_TEST_EMPTY", "FIGCRAFT_DEFINITELY_NOT_SET_67890"] {
+        let resolved = credentials.resolve(Some(name)).expect("no error");
+        assert!(resolved.is_none_or(|s| s.is_set()), "a blank value never resolves to a blank secret");
+    }
+}
+
+#[test]
+fn a_malformed_reference_is_a_configuration_error() {
+    // A name with `=` in it cannot be a variable name: say so rather than reporting it as missing.
+    let credentials = EnvironmentCredentials;
+    let err = credentials.resolve(Some("NOT=A=NAME")).expect_err("refused");
+    assert_eq!(err.kind, AgentErrorKind::Configuration);
+    assert!(err.message.contains("variable name"), "got {}", err.message);
+}
+
+#[test]
+fn the_session_resolves_only_its_own_reference() {
+    // A browser has no environment to read: the key lives in app memory, and the persisted reference
+    // is the reserved logical name. Anything else is refused rather than silently ignored.
+    let mut credentials = SessionCredentials::default();
+    assert!(!credentials.is_set());
+    credentials.set("browser-key");
+    assert!(credentials.is_set());
+
+    let resolved = credentials.resolve(Some(SESSION_REFERENCE)).expect("resolves").expect("a secret");
+    assert_eq!(resolved.expose(), "browser-key");
+
+    let err = credentials.resolve(Some("SOME_ENV_VAR")).expect_err("refused");
+    assert_eq!(err.kind, AgentErrorKind::Configuration);
+
+    credentials.clear();
+    assert!(!credentials.is_set());
+    assert!(credentials.resolve(Some(SESSION_REFERENCE)).expect("no error").is_none());
+}
+
+#[test]
+fn the_session_holds_no_secret_after_clearing() {
+    // A reload must ask for the key again, so clearing really is clearing.
+    let mut credentials = SessionCredentials::default();
+    credentials.set("a-key");
+    credentials.clear();
+    let debug = format!("{credentials:?}");
+    assert!(!debug.contains("a-key"), "the key leaked into debug: {debug}");
+}
+
+#[test]
+fn a_session_secret_does_not_print() {
+    // The session's own debug output must not carry the key either.
+    let mut credentials = SessionCredentials::default();
+    credentials.set("sk-must-not-appear");
+    let debug = format!("{credentials:?}");
+    assert!(!debug.contains("sk-must-not-appear"), "leaked: {debug}");
 }

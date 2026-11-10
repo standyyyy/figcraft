@@ -47,7 +47,7 @@ fn a_cancelled_turn_never_starts_the_stream() {
     let cancel = CancelToken::new();
     cancel.cancel();
     let mut events = Vec::new();
-    let terminal = run(turn(cancel), shadow, None, &mut |e| events.push(e));
+    let terminal = run(turn(cancel), shadow, &crate::EnvironmentCredentials, &mut |e| events.push(e));
     assert!(matches!(terminal, TurnTerminal::Cancelled { .. }), "got {terminal:?}");
     assert!(terminal.commit().is_none(), "a cancelled turn carries no envelope");
     assert!(events.is_empty(), "nothing ran, so nothing was reported: {events:?}");
@@ -59,7 +59,7 @@ fn an_unreachable_provider_fails_with_a_classified_kind() {
     let live = live_session();
     let shadow = Shadow::capture(&live).expect("capture");
     let mut events = Vec::new();
-    let terminal = run(turn(CancelToken::new()), shadow, None, &mut |e| events.push(e));
+    let terminal = run(turn(CancelToken::new()), shadow, &crate::EnvironmentCredentials, &mut |e| events.push(e));
     assert!(terminal.commit().is_none(), "a failure carries no envelope");
     match &terminal {
         TurnTerminal::Failed { kind, message, .. } => {
@@ -85,7 +85,7 @@ fn a_zero_second_limit_stops_the_turn_before_it_asks() {
     let mut t = turn(CancelToken::new());
     t.limits.max_seconds = 0;
     let mut events = Vec::new();
-    let terminal = run(t, shadow, None, &mut |e| events.push(e));
+    let terminal = run(t, shadow, &crate::EnvironmentCredentials, &mut |e| events.push(e));
     assert!(terminal.commit().is_none(), "a limited turn carries no envelope");
     match terminal {
         TurnTerminal::LimitReached { kind, .. } => assert_eq!(kind, AgentErrorKind::Timeout),
@@ -137,7 +137,7 @@ fn a_provider_error_is_summarized_not_dumped() {
     // turn is longer than the clip plus its context.
     let live = live_session();
     let shadow = Shadow::capture(&live).expect("capture");
-    let terminal = run(turn(CancelToken::new()), shadow, None, &mut |_| {});
+    let terminal = run(turn(CancelToken::new()), shadow, &crate::EnvironmentCredentials, &mut |_| {});
     if let TurnTerminal::Failed { message, .. } = &terminal {
         assert!(message.chars().count() < 400, "a failure message is summarized: {} chars", message.chars().count());
     }

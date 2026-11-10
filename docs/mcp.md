@@ -388,6 +388,10 @@ a later step can use `{"$step": 0, "field": "ids/0"}` to target the first match.
 | `key {key, shift, alt, cmd}` | A shortcut or key as if typed on the canvas (every default shortcut, tool keys, Escape, Delete, arrows, number keys for opacity, arrows that pan the view when nothing is selected; while editing text, the text shortcuts and then text editing keys). Keys are names like `A`, `0`, `Enter`, `ArrowLeft`, `=`, `/`, or egui's (`Plus`, `Questionmark`); `cmd` is Cmd on macOS and Ctrl elsewhere. |
 | `type_text {text, id?}` | Type into the text being edited, or replace the contents of text layer `id`. |
 | `inspect_ui {}` | Tool, view and status (and panels, timings and the app's `windows` when attached). |
+| `list_requirements {}` | The structured requirements documents embedded in this file: id, title, and counts. Runs `requirements.list`. |
+| `get_requirements {id? \| title?}` | One requirements document with its Markdown rendering. An exact `id` wins over a `title`. Runs `requirements.get`. |
+| `upsert_requirements {id?, title, summary?, goals?, nonGoals?, audiences?, requirements? [{id?, title, detail?, priority?, acceptanceCriteria?}], acceptanceCriteria?, openQuestions?}` | Create (no `id`) or replace (with `id`) a requirements document. `title` is required; caps apply to every field and an unknown priority is refused. Ids are allocated by the document (`PRD:n`), so replaying the same call produces the same id. Runs `requirements.upsert`. |
+| `export_requirements_markdown {id? \| title?, path?}` | The document as Markdown: the text comes back in the result, or is written to `path` through the engine's guarded file access. Runs `requirements.exportMarkdown`. |
 | `wait_for_changes {after?, timeoutMs?, topics?, limit?}` | Wait for new comment events in the attached app; returns pending events at once, else waits up to `timeoutMs` (default 20 s, max 25 s). Pass the returned `cursor` back to keep watching. Headless returns immediately. |
 
 ### Compact layer trees

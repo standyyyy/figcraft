@@ -124,6 +124,10 @@ const EMBEDDED_TOOLS: &[&str] = &[
     "screenshot",
     "type_text",
     "inspect_ui",
+    "list_requirements",
+    "get_requirements",
+    "upsert_requirements",
+    "export_requirements_markdown",
 ];
 
 impl ToolPolicy {
@@ -155,6 +159,10 @@ pub const TOOL_NAMES: &[&str] = &[
     "key",
     "type_text",
     "inspect_ui",
+    "list_requirements",
+    "get_requirements",
+    "upsert_requirements",
+    "export_requirements_markdown",
     "wait_for_changes",
 ];
 
@@ -420,6 +428,73 @@ fn tools() -> Vec<Value> {
             true,
         ),
         tool(
+            "list_requirements",
+            "List requirements documents",
+            "List the structured requirements documents embedded in this file: id, title and counts. Runs the `requirements.list` command.",
+            empty(),
+            true,
+        ),
+        tool(
+            "get_requirements",
+            "Read a requirements document",
+            "Read one structured requirements document, with its Markdown rendering. Address it by `id` (preferred) or `title`; an exact id wins. Runs the `requirements.get` command.",
+            obj(
+                json!({
+                    "id": string("The document's id (e.g. PRD:1), preferred over title"),
+                    "title": string("The document's title, used when no id is given"),
+                }),
+                &[],
+            ),
+            true,
+        ),
+        tool(
+            "upsert_requirements",
+            "Write a requirements document",
+            "Create or replace a structured requirements document. Omit `id` to create one (the document allocates the next PRD:n); pass an existing `id` to replace it whole. The structure is validated: caps apply to every field, and an unknown priority is refused. Runs the `requirements.upsert` command and returns the saved document.",
+            obj(
+                json!({
+                    "id": string("An existing document's id to replace; omit to create a new one"),
+                    "title": string("The document's title (required)"),
+                    "summary": string("A short summary"),
+                    "goals": {"type": "array", "items": {"type": "string"}, "description": "What this work achieves"},
+                    "nonGoals": {"type": "array", "items": {"type": "string"}, "description": "What it deliberately does not do"},
+                    "audiences": {"type": "array", "items": {"type": "string"}, "description": "Who this is for"},
+                    "requirements": {
+                        "type": "array",
+                        "description": "The individual requirements",
+                        "items": obj(
+                            json!({
+                                "id": string("An id; omitted ones are allocated (r-1, r-2, ...)"),
+                                "title": string("What to build (required)"),
+                                "detail": string("The detail behind it"),
+                                "priority": {"type": "string", "description": "must | should | could | wont (default must)"},
+                                "acceptanceCriteria": {"type": "array", "items": {"type": "string"}, "description": "How it is verified"},
+                            }),
+                            &["title"],
+                        ),
+                    },
+                    "acceptanceCriteria": {"type": "array", "items": {"type": "string"}, "description": "Acceptance criteria for the document as a whole"},
+                    "openQuestions": {"type": "array", "items": {"type": "string"}, "description": "What is still undecided"},
+                }),
+                &["title"],
+            ),
+            false,
+        ),
+        tool(
+            "export_requirements_markdown",
+            "Export requirements as Markdown",
+            "Render one requirements document as Markdown. Without `path` the text comes back in the result; with `path` the file is written through the engine's guarded file access, so automation roots apply.",
+            obj(
+                json!({
+                    "id": string("The document's id (e.g. PRD:1), preferred over title"),
+                    "title": string("The document's title, used when no id is given"),
+                    "path": string("Write the Markdown there instead of returning it"),
+                }),
+                &[],
+            ),
+            false,
+        ),
+        tool(
             "wait_for_changes",
             "Wait for changes",
             "Wait for new comment events in the attached FigCraft app. Returns pending events immediately; otherwise waits up to `timeoutMs` (default 20000, max 25000). Call it again with the returned `cursor` to keep watching. Headless returns immediately (no other writer). Events carry a sequence number, kind, document and a small payload (for comments, the thread id).",
@@ -628,10 +703,57 @@ pub fn call_tool(b: &mut dyn Backend, policy: ToolPolicy, name: &str, args: &Val
         "key" => key(b, &a),
         "type_text" => type_text(b, &a),
         "inspect_ui" => b.call("ui.inspect", json!({})).map(|v| ToolResult::json(&v)),
+        "list_requirements" => exec(b, "requirements.list", json!({})).map(|v| ToolResult::json(&v)),
+        "get_requirements" => requirements_read(b, &a),
+        "upsert_requirements" => match requirements_params(&a) {
+            Ok(params) => exec(b, "requirements.upsert", params).map(|v| ToolResult::json(&v)),
+            Err(e) => Err(e),
+        },
+        "export_requirements_markdown" => requirements_export(b, &a),
         "wait_for_changes" => wait_for_changes(b, &a),
         other => Err(format!("unknown tool `{other}` (tools/list has: {})", TOOL_NAMES.join(", "))),
     };
     r.unwrap_or_else(ToolResult::error)
+}
+
+/// The `id`/`title`/`path` a requirements tool addresses its document with.
+fn requirements_target(b: &mut dyn Backend, a: &Map<String, Value>, command: &str) -> Result<Value, String> {
+    let mut params = Map::new();
+    for key in ["id", "title", "path"] {
+        if let Some(v) = a.get(key) {
+            params.insert(key.to_string(), v.clone());
+        }
+    }
+    exec(b, command, Value::Object(params))
+}
+
+/// Reading a document: the structure, with its Markdown alongside (JSON, because both are useful).
+fn requirements_read(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, String> {
+    requirements_target(b, a, "requirements.get").map(|v| ToolResult::json(&v))
+}
+
+/// Exporting: the Markdown text itself, since that is what a model reads. Writing a file returns
+/// the write result instead, which is JSON.
+fn requirements_export(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, String> {
+    let r = requirements_target(b, a, "requirements.exportMarkdown")?;
+    match r.get("markdown").and_then(Value::as_str) {
+        Some(md) => Ok(ToolResult::text(md)),
+        None => Ok(ToolResult::json(&r)),
+    }
+}
+
+/// `upsert_requirements`' arguments as the command's parameters.
+///
+/// The command validates, allocates ids and reports; this only forwards, so the tool crate never
+/// writes a document field itself and UI, MCP and the Agent share one implementation.
+fn requirements_params(a: &Map<String, Value>) -> Result<Value, String> {
+    let mut params = Map::new();
+    for key in ["id", "title", "summary", "goals", "nonGoals", "audiences", "requirements", "acceptanceCriteria", "openQuestions"] {
+        if let Some(v) = a.get(key) {
+            params.insert(key.to_string(), v.clone());
+        }
+    }
+    Ok(Value::Object(params))
 }
 
 fn list_commands(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, String> {

@@ -11,8 +11,9 @@ fn names(policy: ToolPolicy) -> Vec<String> {
 
 #[test]
 fn catalog_matches_the_existing_mcp_surface() {
-    // These 19 tools, in this order, are what MCP clients have always seen. The shared catalog must
-    // not add, drop or reorder one without the MCP protocol tests changing too.
+    // These 23 tools, in this order, are the MCP surface: the 19 canvas tools MCP has always had,
+    // then the 4 requirements tools M13 added. The shared catalog must not add, drop or reorder one
+    // without the MCP protocol tests changing too.
     let expected = [
         "list_commands",
         "run_command",
@@ -32,6 +33,10 @@ fn catalog_matches_the_existing_mcp_surface() {
         "key",
         "type_text",
         "inspect_ui",
+        "list_requirements",
+        "get_requirements",
+        "upsert_requirements",
+        "export_requirements_markdown",
         "wait_for_changes",
     ];
     assert_eq!(TOOL_NAMES, expected, "TOOL_NAMES drifted from the MCP surface");
@@ -134,4 +139,118 @@ fn an_unknown_tool_name_is_refused() {
     let r = call_tool(&mut b, ToolPolicy::ExternalMcp, "definitely_not_a_tool", &json!({}));
     assert!(r.is_error);
     assert!(b.calls.is_empty());
+}
+
+/// A backend that answers commands by name, so dispatch is observable.
+struct Commands {
+    seen: Vec<(String, Value)>,
+}
+
+impl Commands {
+    fn new() -> Self {
+        Self { seen: Vec::new() }
+    }
+}
+
+impl crate::backend::Backend for Commands {
+    fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        self.seen.push((method.to_string(), params));
+        Ok(json!({"ok": true}))
+    }
+    fn has_ui(&self) -> bool {
+        false
+    }
+    fn describe(&self) -> String {
+        "commands".into()
+    }
+}
+
+#[test]
+fn the_requirements_tools_dispatch_to_commands() {
+    // The tools are adapters: they never touch document fields, so undo, collaboration, MCP and the
+    // UI all see one implementation.
+    for (tool, params, want) in [
+        ("list_requirements", json!({}), "requirements.list"),
+        ("get_requirements", json!({"id": "PRD:1"}), "requirements.get"),
+        ("export_requirements_markdown", json!({"title": "T"}), "requirements.exportMarkdown"),
+    ] {
+        let mut b = Commands::new();
+        let r = call_tool(&mut b, ToolPolicy::ExternalMcp, tool, &params);
+        assert!(!r.is_error, "{tool} should succeed: {}", r.first_text());
+        let (method, sent) = b.seen.first().expect("a command ran");
+        // Every requirement tool is an adapter over a command, sent through `engine.execute`.
+        assert_eq!(method, "engine.execute");
+        assert_eq!(sent.get("command").and_then(Value::as_str), Some(want), "{tool} must run {want}");
+    }
+}
+
+#[test]
+fn upsert_requirements_forwards_the_whole_structure() {
+    let mut b = Commands::new();
+    let args = json!({
+        "title": "Checkout",
+        "summary": "s",
+        "goals": ["g"],
+        "nonGoals": ["n"],
+        "audiences": ["a"],
+        "requirements": [{"title": "r", "priority": "must", "acceptanceCriteria": ["c"]}],
+        "acceptanceCriteria": ["doc c"],
+        "openQuestions": ["q"],
+    });
+    let r = call_tool(&mut b, ToolPolicy::EmbeddedAgent, "upsert_requirements", &args);
+    assert!(!r.is_error, "upsert should succeed: {}", r.first_text());
+    let (method, sent) = b.seen.first().expect("a command ran");
+    assert_eq!(method, "engine.execute");
+    assert_eq!(sent.get("command").and_then(Value::as_str), Some("requirements.upsert"));
+    let params = sent.get("params").expect("the command's parameters");
+    for key in ["title", "summary", "goals", "nonGoals", "audiences", "requirements", "acceptanceCriteria", "openQuestions"] {
+        assert_eq!(params.get(key), args.get(key), "`{key}` is forwarded unchanged");
+    }
+}
+
+#[test]
+fn the_requirements_tools_are_on_both_surfaces() {
+    for tool in ["list_requirements", "get_requirements", "upsert_requirements", "export_requirements_markdown"] {
+        assert!(ToolPolicy::ExternalMcp.allows(tool), "{tool} stays available to external MCP");
+        assert!(ToolPolicy::EmbeddedAgent.allows(tool), "{tool} is document-local and replayable, so the Agent gets it too");
+    }
+}
+
+#[test]
+fn upsert_requirements_declares_title_as_required() {
+    // The schema tells a model `title` is needed; the command refuses without it (the engine's
+    // `req_string`), so the two agree. This pins the declaration, which is what a model sees.
+    let defs = tool_definitions(ToolPolicy::ExternalMcp);
+    let upsert = defs
+        .iter()
+        .find(|t| t.get("name").and_then(Value::as_str) == Some("upsert_requirements"))
+        .expect("upsert_requirements is defined");
+    assert_eq!(upsert.pointer("/inputSchema/required"), Some(&json!(["title"])), "title is required: {upsert}");
+    // Every property it documents is reachable, and unknown ones are refused before dispatch.
+    let mut b = Commands::new();
+    let r = call_tool(&mut b, ToolPolicy::EmbeddedAgent, "upsert_requirements", &json!({"nonsense": 1}));
+    assert!(r.is_error);
+    assert!(r.first_text().contains("unknown argument"), "got: {}", r.first_text());
+    assert!(b.seen.is_empty(), "nothing reached the backend");
+}
+
+#[test]
+fn export_returns_markdown_text_rather_than_a_json_wrapper() {
+    // What a model reads should be the Markdown itself.
+    struct Markdown;
+    impl crate::backend::Backend for Markdown {
+        fn call(&mut self, _method: &str, _params: Value) -> Result<Value, String> {
+            Ok(json!({"markdown": "# A title\n\nbody", "bytes": 18}))
+        }
+        fn has_ui(&self) -> bool {
+            false
+        }
+        fn describe(&self) -> String {
+            "markdown".into()
+        }
+    }
+    let mut b = Markdown;
+    let r = call_tool(&mut b, ToolPolicy::EmbeddedAgent, "export_requirements_markdown", &json!({"id": "PRD:1"}));
+    assert!(!r.is_error);
+    assert_eq!(r.first_text(), "# A title\n\nbody", "the raw Markdown is the tool result");
 }

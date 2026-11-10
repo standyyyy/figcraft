@@ -3,7 +3,7 @@
 
 use serde_json::{Map, Value, json};
 
-use crate::tools::normalize_props;
+use crate::catalog::normalize_props;
 
 fn width_of(paint: Value) -> Value {
     let mut props: Map<String, Value> = json!({"fills": [paint]}).as_object().cloned().unwrap();

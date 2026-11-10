@@ -6,7 +6,7 @@ use figcraft_doc::{ExportFormat, NodeId};
 use figcraft_engine::{PointerEvent, PointerKind, Session, textedit};
 use serde_json::{Value, json};
 
-use crate::backend::Backend;
+use crate::Backend;
 
 /// Headless backend: a [`Session`] with one untitled document.
 pub struct Headless {

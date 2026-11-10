@@ -2,7 +2,7 @@
 
 use serde_json::{Value, json};
 
-use crate::backend::Backend;
+use crate::Backend;
 
 pub const DOC_URI: &str = "figcraft://document";
 pub const COMMANDS_URI: &str = "figcraft://commands";

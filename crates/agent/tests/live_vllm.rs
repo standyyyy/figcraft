@@ -1,19 +1,20 @@
-#![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 //! The live acceptance test against a reachable OpenAI-compatible endpoint, through Rig's streaming
 //! runtime -- the same path the app uses, not a side door.
 //!
 //! Opt-in, so the deterministic suite never touches the network:
 //!
 //! ```text
-//! FIGCRAFT_AI_BASE_URL=http://127.0.0.1:8111/v1 \
-//! FIGCRAFT_AI_MODEL=DeepSeek-V4.1-Flash-1017 \
+//! FIGCRAFT_AGENT_LIVE_URL=http://127.0.0.1:8111/v1 \
+//! FIGCRAFT_AGENT_LIVE_MODEL=DeepSeek-V4.1-Flash-1017 \
 //! cargo test -p figcraft-agent --test live_vllm -- --ignored --nocapture
 //! ```
 //!
-//! A credential, when the endpoint needs one, is named by `FIGCRAFT_AI_API_KEY_NAME` and read from
-//! that variable: no key is committed, and none is printed.
+//! A credential, when the endpoint needs one, is passed as `FIGCRAFT_AGENT_LIVE_KEY` itself: no key is
+//! committed, logged or printed, and the test never writes it anywhere.
 //!
 //! Without the variables the test says it skipped and returns, so a stray `--ignored` is harmless.
+
+#![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
 use figcraft_agent::AgentConfig;
 use figcraft_agent::TurnTerminal;
@@ -25,10 +26,10 @@ use serde_json::json;
 
 /// The endpoint and model from the environment, or `None` when not configured.
 fn live_config() -> Option<(AgentConfig, Option<String>)> {
-    let base = std::env::var("FIGCRAFT_AI_BASE_URL").ok().filter(|v| !v.trim().is_empty())?;
-    let model = std::env::var("FIGCRAFT_AI_MODEL").ok().filter(|v| !v.trim().is_empty())?;
-    let key_name = std::env::var("FIGCRAFT_AI_API_KEY_NAME").ok().filter(|v| !v.trim().is_empty());
-    let credential = key_name.as_deref().and_then(|n| std::env::var(n).ok()).filter(|v| !v.is_empty());
+    let base = std::env::var("FIGCRAFT_AGENT_LIVE_URL").ok().filter(|v| !v.trim().is_empty())?;
+    let model = std::env::var("FIGCRAFT_AGENT_LIVE_MODEL").ok().filter(|v| !v.trim().is_empty())?;
+    // The variable holds the key itself, so nothing has to be set up twice. It stays in memory.
+    let credential = std::env::var("FIGCRAFT_AGENT_LIVE_KEY").ok().filter(|v| !v.trim().is_empty());
     let prefs = figcraft_engine::prefs::AgentPrefs {
         enabled: true,
         base_url: base,
@@ -67,14 +68,31 @@ fn shadow() -> Shadow {
 }
 
 fn turn(config: AgentConfig, request: &str, cancel: CancelToken) -> Turn {
+    // The identity of a synthetic document nobody edits; a test that edits one builds its own turn
+    // with the document's real uid and revision (see `turn_for`).
     Turn { turn: 1, request: request.into(), document_uid: 1, base_revision: 1, config, limits: Limits::default(), cancel, history: Vec::new() }
 }
 
+/// A turn built against `session`'s real identity, so its envelope can be checked against it.
+fn turn_for(config: AgentConfig, request: &str, session: &figcraft_engine::Session) -> Turn {
+    let ds = session.ds().expect("a document");
+    Turn {
+        turn: 1,
+        request: request.into(),
+        document_uid: ds.uid,
+        base_revision: ds.revision,
+        config,
+        limits: Limits::default(),
+        cancel: CancelToken::new(),
+        history: Vec::new(),
+    }
+}
+
 #[test]
-#[ignore = "needs FIGCRAFT_AI_BASE_URL and FIGCRAFT_AI_MODEL; set them to run against a real endpoint"]
+#[ignore = "needs FIGCRAFT_AGENT_LIVE_URL and FIGCRAFT_AGENT_LIVE_MODEL; set them to run against a real endpoint"]
 fn a_streamed_answer_arrives_through_rig() {
     let Some((config, credential)) = live_config() else {
-        eprintln!("skipped: set FIGCRAFT_AI_BASE_URL and FIGCRAFT_AI_MODEL to run this");
+        eprintln!("skipped: set FIGCRAFT_AGENT_LIVE_URL and FIGCRAFT_AGENT_LIVE_MODEL to run this");
         return;
     };
     let mut events = Vec::new();
@@ -102,10 +120,10 @@ fn a_streamed_answer_arrives_through_rig() {
 }
 
 #[test]
-#[ignore = "needs FIGCRAFT_AI_BASE_URL and FIGCRAFT_AI_MODEL; set them to run against a real endpoint"]
+#[ignore = "needs FIGCRAFT_AGENT_LIVE_URL and FIGCRAFT_AGENT_LIVE_MODEL; set them to run against a real endpoint"]
 fn a_model_calls_the_canvas_tool_and_the_edit_replays() {
     let Some((config, credential)) = live_config() else {
-        eprintln!("skipped: set FIGCRAFT_AI_BASE_URL and FIGCRAFT_AI_MODEL to run this");
+        eprintln!("skipped: set FIGCRAFT_AGENT_LIVE_URL and FIGCRAFT_AGENT_LIVE_MODEL to run this");
         return;
     };
     let mut events = Vec::new();
@@ -141,10 +159,10 @@ fn a_model_calls_the_canvas_tool_and_the_edit_replays() {
 }
 
 #[test]
-#[ignore = "needs FIGCRAFT_AI_BASE_URL and FIGCRAFT_AI_MODEL; set them to run against a real endpoint"]
+#[ignore = "needs FIGCRAFT_AGENT_LIVE_URL and FIGCRAFT_AGENT_LIVE_MODEL; set them to run against a real endpoint"]
 fn cancelling_mid_turn_commits_nothing() {
     let Some((config, credential)) = live_config() else {
-        eprintln!("skipped: set FIGCRAFT_AI_BASE_URL and FIGCRAFT_AI_MODEL to run this");
+        eprintln!("skipped: set FIGCRAFT_AGENT_LIVE_URL and FIGCRAFT_AGENT_LIVE_MODEL to run this");
         return;
     };
     // Cancelled before the first poll: the strongest form of "no late result may commit".
@@ -157,10 +175,10 @@ fn cancelling_mid_turn_commits_nothing() {
 }
 
 #[test]
-#[ignore = "needs FIGCRAFT_AI_BASE_URL and FIGCRAFT_AI_MODEL; set them to run against a real endpoint"]
+#[ignore = "needs FIGCRAFT_AGENT_LIVE_URL and FIGCRAFT_AGENT_LIVE_MODEL; set them to run against a real endpoint"]
 fn a_follow_up_turn_continues_the_previous_one() {
     let Some((config, credential)) = live_config() else {
-        eprintln!("skipped: set FIGCRAFT_AI_BASE_URL and FIGCRAFT_AI_MODEL to run this");
+        eprintln!("skipped: set FIGCRAFT_AGENT_LIVE_URL and FIGCRAFT_AGENT_LIVE_MODEL to run this");
         return;
     };
     // One document across both turns: the second turn's shadow is what the first turn produced, which
@@ -208,10 +226,10 @@ fn a_follow_up_turn_continues_the_previous_one() {
 }
 
 #[test]
-#[ignore = "needs FIGCRAFT_AI_BASE_URL and FIGCRAFT_AI_MODEL; set them to run against a real endpoint"]
+#[ignore = "needs FIGCRAFT_AGENT_LIVE_URL and FIGCRAFT_AGENT_LIVE_MODEL; set them to run against a real endpoint"]
 fn a_stored_continuation_round_trips_through_json() {
     let Some((config, credential)) = live_config() else {
-        eprintln!("skipped: set FIGCRAFT_AI_BASE_URL and FIGCRAFT_AI_MODEL to run this");
+        eprintln!("skipped: set FIGCRAFT_AGENT_LIVE_URL and FIGCRAFT_AGENT_LIVE_MODEL to run this");
         return;
     };
     let mut events = Vec::new();
@@ -227,4 +245,118 @@ fn a_stored_continuation_round_trips_through_json() {
     let messages = figcraft_agent::history::continuation_messages(&reparsed);
     assert_eq!(messages.len(), reparsed.len(), "and every message is valid Rig history");
     println!("live: {} messages round-tripped through JSON and back into Rig", messages.len());
+}
+
+#[test]
+#[ignore = "needs FIGCRAFT_AGENT_LIVE_URL and FIGCRAFT_AGENT_LIVE_MODEL; set them to run against a real endpoint"]
+fn streaming_is_real_not_one_assembled_reply() {
+    // The plan is explicit: a turn that only ever produced one text piece would pass a "text arrived"
+    // assertion while proving nothing about the stream. This asks for something long enough that a
+    // streaming server sends several deltas, and requires more than one.
+    let Some((config, credential)) = live_config() else {
+        eprintln!("skipped: set FIGCRAFT_AGENT_LIVE_URL and FIGCRAFT_AGENT_LIVE_MODEL to run this");
+        return;
+    };
+    let mut events = Vec::new();
+    let terminal = run(
+        turn(config, "Count from one to twenty in words, separated by spaces. Nothing else.", CancelToken::new()),
+        shadow(),
+        &live_credentials(&credential),
+        &mut |e| events.push(e),
+    );
+    let deltas = events.iter().filter(|e| matches!(e, AgentEvent::TextDelta { .. })).count();
+    println!("live: {deltas} text deltas");
+    assert!(deltas > 1, "a streamed answer arrives in pieces, not one assembled reply; got {deltas}");
+    assert!(matches!(terminal, TurnTerminal::Success { .. }), "the turn succeeded: {terminal:?}");
+}
+
+#[test]
+#[ignore = "needs FIGCRAFT_AGENT_LIVE_URL and FIGCRAFT_AGENT_LIVE_MODEL; set them to run against a real endpoint"]
+fn a_stale_revision_refuses_the_replay() {
+    // The envelope names the revision the turn was built from. If the live document moved on while the
+    // model worked, applying it would overwrite whatever changed it -- the UI's commit gate refuses.
+    let Some((config, credential)) = live_config() else {
+        eprintln!("skipped: set FIGCRAFT_AGENT_LIVE_URL and FIGCRAFT_AGENT_LIVE_MODEL to run this");
+        return;
+    };
+    let mut session = figcraft_engine::Session::new();
+    session.execute("file.new", &json!({})).expect("file.new");
+    let (first_uid, first_revision) = {
+        let ds = session.ds().expect("doc");
+        (ds.uid, ds.revision)
+    };
+    let before = (first_uid, session.doc().expect("doc").nodes().count());
+
+    let mut events = Vec::new();
+    let terminal = run(
+        turn_for(config, "Create a rectangle 40 wide and 40 tall at 0,0.", &session),
+        shadow_of(&session),
+        &live_credentials(&credential),
+        &mut |e| events.push(e),
+    );
+
+    let envelope = match &terminal {
+        TurnTerminal::Success { commit: Some(c), .. } => c.clone(),
+        other => panic!("expected a success with an envelope, got {other:?}"),
+    };
+    // The document moves on after the turn was built.
+    session.execute("node.create", &json!({"type": "ellipse", "width": 5.0, "height": 5.0})).expect("edit");
+    let (uid, revision) = {
+        let ds = session.ds().expect("doc");
+        (ds.uid, ds.revision)
+    };
+    assert_eq!(uid, first_uid, "the same document");
+    assert!(revision > first_revision, "the test's own edit moved it on");
+    assert!(!envelope.accepts(uid, revision), "the envelope must be refused after a change");
+    let reason = envelope.refusal(uid, revision).expect("a reason");
+    println!("live: refused because {reason}");
+    assert!(reason.contains("changed"), "the refusal names the cause: {reason}");
+
+    // And applying nothing leaves the document exactly as the test left it.
+    let after = (uid, session.doc().expect("doc").nodes().count());
+    assert_eq!(after, (before.0, before.1 + 1), "only the test's own edit landed");
+}
+
+#[test]
+#[ignore = "needs FIGCRAFT_AGENT_LIVE_URL and FIGCRAFT_AGENT_LIVE_MODEL; set them to run against a real endpoint"]
+fn a_requirements_document_is_written_through_document_local_commands() {
+    // A PRD is document data, so the model writes it with a command the shadow can replay. This asks
+    // for every part the plan lists and reads the Markdown back from the document, not from the model.
+    let Some((config, credential)) = live_config() else {
+        eprintln!("skipped: set FIGCRAFT_AGENT_LIVE_URL and FIGCRAFT_AGENT_LIVE_MODEL to run this");
+        return;
+    };
+    let mut session = figcraft_engine::Session::new();
+    session.execute("file.new", &json!({})).expect("file.new");
+
+    let mut events = Vec::new();
+    let terminal = run(
+        turn(
+            config,
+            "Write a short requirements document titled 'Checkout' for a one-screen checkout: \
+             a summary, two goals, one non-goal, two requirements, two acceptance criteria and one open question.",
+            CancelToken::new(),
+        ),
+        shadow_of(&session),
+        &live_credentials(&credential),
+        &mut |e| events.push(e),
+    );
+
+    let replay = match &terminal {
+        TurnTerminal::Success { commit: Some(c), .. } => c.batch_commands(),
+        other => panic!("expected a success with a replay, got {other:?}"),
+    };
+    let touched_requirements = replay.iter().any(|c| c["command"].as_str().is_some_and(|id| id.starts_with("requirements.")));
+    println!("live: replay commands {:?}", replay.iter().filter_map(|c| c["command"].as_str()).collect::<Vec<_>>());
+    assert!(touched_requirements, "the model wrote the requirements through a command: {replay:?}");
+
+    // Apply it, then read the document back: the Markdown comes from the engine, not the model.
+    session.execute("command.batch", &json!({"commands": replay})).expect("apply");
+    let list = session.execute("requirements.list", &json!({})).expect("list");
+    let id = list["documents"][0]["id"].as_str().expect("a document id").to_string();
+    let rendered = session.execute("requirements.exportMarkdown", &json!({"id": id})).expect("render");
+    let markdown = rendered["markdown"].as_str().expect("markdown");
+    println!("live: markdown has {} lines", markdown.lines().count());
+    assert!(markdown.contains('#'), "it has headings");
+    assert!(markdown.len() > 80, "it is a document, not a title: {markdown}");
 }

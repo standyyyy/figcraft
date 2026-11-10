@@ -32,7 +32,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 | 16 | Dev Mode: renaming the file in Dev Mode to check; the editor extension is left to the MCP server (publishing mappings from the code repository landed 2026-10-30) | Feature | 1–2 | [dev-mode-parity](dev-mode-parity.md) |
 | 17 | Branching: text runs merged whole, branches only their author sees in a live session (branches in live sessions, export settings and guides item by item, and history entries for creation and updates landed 2026-10-24) | Feature | 1–2 | [collaboration-parity](collaboration-parity.md) |
 | 18 | Display P3 on screen: blocked upstream (egui-wgpu picks an 8-bit sRGB surface); gamut warning and soft-proof sRGB landed, as did several windows | Hardware | 4–8 | [hardware-parity](hardware-parity.md) |
-| 19 | AI features | AI | 30–60 | [target-app-parity](target-app-parity.md) |
+| 19 | AI features | AI | 24–48 | [target-app-parity](target-app-parity.md) |
 | 20 | Mobile apps (view, mirror, comment) | Platforms | 20–40 | [hardware-parity](hardware-parity.md) |
 | 21 | Menu items without a command: none left (landed 2026-10-11) | Feature | — | [parity-checklist](parity-checklist.md) |
 | 22 | Screen readers never run; browser has no accessibility tree | UI/UX | 4–8 | [ui-parity](ui-parity.md) |

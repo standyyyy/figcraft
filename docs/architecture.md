@@ -9,7 +9,7 @@ Rust (2026-10-10).
 ## Crates and layers
 
 `cargo xtask layers` enforces the layering (`xtask/src/layers.rs`): a crate may depend only on
-lower layers. Nothing below L6 depends on egui, eframe, rfd or winit, so the UI crate can be
+lower layers. Nothing below L6 makes a network request or depends on egui, eframe, rfd or winit, so the UI crate can be
 replaced.
 
 | Layer | Crate | Lines | Role |
@@ -31,8 +31,8 @@ replaced.
 | L6 | `figcraft-ui-egui` | ~31.9k | The UI3-style frontend: canvas (render worker), toolbar, layers, Design/Prototype/Inspect panels, colour picker, menus, dialogs, presenter, comments, accessibility (AccessKit), the control channel server |
 | L6 | `figcraft-mcp` | ~2.4k | MCP server (JSON-RPC over stdio), headless or bridged to a running app; a thin adapter over the shared tool catalog |
 | L6 | `figcraft-agent-tools` | ~2.2k | The shared canvas tool catalog: definitions, JSON Schemas, argument validation and dispatch. Both MCP and the in-app Agent consume it, and `ToolPolicy` decides which tools a surface offers (external MCP: all; the embedded Agent: the document-local, replayable subset) |
-| L6 | `figcraft-agent` | ~3.4k | The embedded Agent: the Rig gateway, the model transport (chat-completions with tool calling), the turn loop, the shadow session whose replay commits as one `command.batch`, the lifecycle contract (events, cancellation, limits, retry) and capped, compacted conversation history |
-| L6 | `figcraft-collab-net` | ~3.0k | Live sessions over the network: the WebSocket transport (tungstenite, a reader and a writer thread per connection), the hub that runs a collaboration core server per open file for the session host the app embeds and for `figcraft-server` (behind a `Backend`), the joining and managing clients (publishing), invite links, presence relay and limits; the browser client; the only crate allowed networking dependencies |
+| L6 | `figcraft-agent` | ~4.2k | The embedded Agent: Rig's streaming agent and tool loop (Rig owns the wire protocol, SSE decoding and final-response assembly), the shadow session whose replay commits as one `command.batch`, the typed terminal that only a success can carry a replay in, the lifecycle contract (events, cancellation, limits), the credential contract, and capped, compacted conversation history. **It is the one crate below the app that makes outbound provider requests**, through Rig's reqwest transport; `collab-net` owns the WebSocket side. Lower layers stay network-free |
+| L6 | `figcraft-collab-net` | ~3.0k | Live sessions over the network: the WebSocket transport (tungstenite, a reader and a writer thread per connection), the hub that runs a collaboration core server per open file for the session host the app embeds and for `figcraft-server` (behind a `Backend`), the joining and managing clients (publishing), invite links, presence relay and limits; the browser client; the WebSocket side of networking |
 | apps | `figcraft`, `figcraft-cli`, `figcraft-web`, `figcraft-server` | ~3.2k | Desktop app (eframe + wgpu), command line, browser build (WASM, WebGPU/WebGL2), collaboration server (files, share links, persistence; [`server.md`](server.md)) |
 | plugins | `plugins/` (own workspace) | | Rust plugin SDK and two example plugins, built for wasm32 by `cargo xtask plugins` ([`plugins.md`](plugins.md)) |
 | tools | `xtask` | | `ci`, `layers`, `assets`, `parity`, `version`, `icon`, `wasm`, `plugins`, `bench` |

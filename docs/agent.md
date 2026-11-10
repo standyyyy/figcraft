@@ -75,8 +75,8 @@ Every dimension a model can run away in is bounded:
 
 | Limit | Default |
 |---|---|
-| Model rounds per turn | 12 |
-| Tool calls per turn | 40 |
+| Model rounds per turn | 50 |
+| Tool calls per turn | 120 |
 | One tool's arguments | 256 KiB |
 | One tool's result (fed back) | 512 KiB |
 | One turn | 600 s |
@@ -115,20 +115,29 @@ because no OpenAI-compatible endpoint shares one.
 
 ## Browser
 
-The browser build needs the endpoint to permit CORS. A refusal is reported as an unreachable
-provider with that cause, not as a silent failure.
+The browser runs the same turn code as the desktop, driven differently. A page has one thread, so it
+cannot park a worker waiting for a provider: `TurnDriver` is advanced by a `spawn_local` future that
+awaits each stream item and yields to the event loop, where the desktop advances the same driver
+under `block_on`. The shadow, the typed terminal, the "only a success carries a replay" rule and the
+single `command.batch` the UI thread applies are shared, so a turn behaves the same on either.
 
-No JavaScript or TypeScript is involved: the web shell is the existing Rust one, and the Agent runs
-there through the same host interface.
+The endpoint must permit CORS: the request comes from the page. A refusal is reported as an
+unreachable provider with that cause, not as a silent failure.
+
+The key lives in app memory only, because a page has no environment to read. Preferences keep the
+endpoint and model; a reload asks for the key again. Nothing writes it to storage, a URL or a file.
+
+No JavaScript or TypeScript is involved: the web shell is the existing Rust one.
 
 ## Where the pieces live
 
 | Crate | Responsibility |
 |---|---|
 | `figcraft-agent-tools` (L6) | The shared catalog: definitions, policy, validation, dispatch. |
-| `figcraft-agent` (L6) | Rig gateway, model transport, turn loop, shadow session, lifecycle, history. |
+| `figcraft-agent` (L6) | Rig's streaming agent and tool loop, the driver both hosts advance, shadow session, lifecycle, credentials, history. |
 | `figcraft-ui-egui` | The panel, its state machine, and the `AgentHost` interface. |
 | `apps/figcraft` | The desktop worker thread behind `AgentHost`. |
+| `apps/figcraft-web` | The browser's local future behind the same `AgentHost`. |
 
 The engine owns the provider preference **data** and never depends on `figcraft-agent`, so no Rig
 type reaches a preferences file, and the credential is stored as a variable **name** that `Debug`
@@ -139,8 +148,8 @@ redacts.
 The deterministic suite never touches the network. To exercise a real endpoint:
 
 ```sh
-FIGCRAFT_AI_BASE_URL=http://127.0.0.1:8111/v1 \
-FIGCRAFT_AI_MODEL=DeepSeek-V4.1-Flash-1017 \
+FIGCRAFT_AGENT_LIVE_URL=http://127.0.0.1:8111/v1 \
+FIGCRAFT_AGENT_LIVE_MODEL=DeepSeek-V4.1-Flash-1017 \
 cargo test -p figcraft-agent --test live_vllm -- --ignored --nocapture
 ```
 

@@ -86,27 +86,42 @@ fn the_desktop_worker_starts_no_thread_until_a_turn_runs() {
 }
 
 #[test]
-fn the_desktop_worker_reports_the_missing_transport_rather_than_fabricating_an_edit() {
-    // The tool catalog, shadow and commit path are ready; the model transport is the remaining seam.
-    // A build without it must say so, not invent a document change.
+fn the_desktop_worker_reports_an_unreachable_provider_and_commits_nothing() {
+    // The transport is wired; a provider nothing listens on must be classified, not crash the
+    // worker, and no replay may leave it: a failed turn changes no document.
     let mut worker = crate::agent_worker::WorkerHost::new();
-    let _token = start(&mut worker, 1);
+    let prefs = figcraft_engine::prefs::AgentPrefs {
+        enabled: true,
+        base_url: "http://127.0.0.1:1".into(),
+        model: "test-model".into(),
+        timeout_seconds: 5,
+        ..figcraft_engine::prefs::AgentPrefs::default()
+    };
+    let config = figcraft_agent::AgentConfig::from_prefs(&prefs).expect("valid config");
+    let _token = worker.start(HostRequest::Start(Box::new(crate::agent_host::TurnRequest {
+        turn: 1,
+        request: "draw a card".into(),
+        snapshot: snapshot(),
+        limits: Limits::default(),
+        config,
+    })));
 
-    // Wait for the worker to finish the turn (it reports at once).
     let mut events = Vec::new();
-    for _ in 0..200 {
+    for _ in 0..400 {
         events.extend(worker.drain());
         if events.iter().any(AgentEvent::is_terminal) {
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(5));
+        std::thread::sleep(std::time::Duration::from_millis(10));
     }
     assert!(events.iter().any(|e| matches!(e, AgentEvent::Started { turn: 1 })), "the turn started: {events:?}");
     let terminal = events.iter().find(|e| e.is_terminal()).expect("the turn ended");
     match terminal {
-        AgentEvent::Failed { kind, message, .. } => {
-            assert_eq!(*kind, AgentErrorKind::Configuration);
-            assert!(message.contains("transport"), "the message names the missing piece: {message}");
+        AgentEvent::Failed { kind, .. } => {
+            assert!(
+                matches!(kind, AgentErrorKind::Unreachable | AgentErrorKind::Timeout),
+                "an unreachable provider is classified as such, got {kind:?}"
+            );
         }
         other => panic!("expected a failure, got {other:?}"),
     }

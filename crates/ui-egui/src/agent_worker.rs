@@ -200,7 +200,7 @@ fn worker_loop(rx: Receiver<Job>, events: Arc<Mutex<Vec<AgentEvent>>>, replay: A
 /// failed or stale turn records no replay, which is what keeps the document untouched.
 fn run_turn(
     turn: u64,
-    _request: &str,
+    request: &str,
     snapshot: &Snapshot,
     limits: &Limits,
     config: &AgentConfig,
@@ -244,23 +244,48 @@ fn run_turn(
         return;
     }
 
-    // Drive the turn through the tool set. The model transport itself is the one piece this build
-    // does not carry yet: without a reachable endpoint there is no answer to apply, so the turn
-    // reports that rather than fabricating an edit. `turn_loop` is the seam the transport plugs into
-    // (see `docs/agent.md`), and the tests exercise it with a scripted caller.
-    let _ = (&tools, limits);
-    if cancel.is_cancelled() {
-        push_event(events, AgentEvent::Cancelled { turn });
-        return;
-    }
-    let steps: Vec<ReplayStep> = Vec::new();
-    let _ = &steps;
-    push_event(events, AgentEvent::Failed {
+    // Drive the turn: ask the model, run the tools it asks for, repeat until it answers or a limit
+    // stops it. The loop lives here rather than in the panel so the UI thread never blocks.
+    let credential = credential_for(config);
+    let transport = figcraft_agent::transport::Transport::new(config.timeout_seconds());
+    let mut emit = |event: AgentEvent| push_event(events, event);
+    let end = figcraft_agent::transport::run_turn(
+        config,
+        credential.as_deref(),
+        &transport,
+        &tools,
         turn,
-        kind: AgentErrorKind::Configuration,
-        message: "the model transport is not wired in this build; the tool catalog, shadow session and commit path are ready for it".into(),
-    });
-    let _ = replay;
+        request,
+        limits,
+        cancel,
+        &mut emit,
+    );
+
+    match end {
+        figcraft_agent::transport::TurnEnd::Cancelled => {
+            push_event(events, AgentEvent::Cancelled { turn });
+        }
+        figcraft_agent::transport::TurnEnd::Stopped(kind, message) => {
+            push_event(events, AgentEvent::Failed { turn, kind, message });
+        }
+        figcraft_agent::transport::TurnEnd::Answered(_) => {
+            // The shadow holds the edits; hand the replay to the UI thread, which commits it against
+            // the live document only if the revision still matches.
+            let steps = tools.into_shadow().map(|sh| sh.replay().to_vec()).unwrap_or_default();
+            if !steps.is_empty() {
+                let json: Vec<Value> = steps.iter().map(|s: &ReplayStep| serde_json::json!({"command": s.command, "params": s.params})).collect();
+                if let Ok(mut slot) = replay.lock() {
+                    *slot = Some(json);
+                }
+            }
+            push_event(events, AgentEvent::Committed { turn, undo_label: figcraft_agent::shadow::undo_label(request) });
+        }
+    }
+}
+
+/// The credential a turn may use, resolved from the environment by the name in the config.
+fn credential_for(config: &AgentConfig) -> Option<String> {
+    config.credential().and_then(|name| std::env::var(name).ok()).filter(|v| !v.is_empty())
 }
 
 /// Build a shadow `Session` from a snapshot's document JSON.

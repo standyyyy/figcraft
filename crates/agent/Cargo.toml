@@ -18,3 +18,5 @@ rig-core = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
+# The model transport: blocking HTTP, the same client the font store already ships.
+ureq = { workspace = true }

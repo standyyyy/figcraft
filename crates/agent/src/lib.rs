@@ -15,6 +15,7 @@ pub mod run;
 pub mod gateway;
 pub mod history;
 pub mod shadow;
+pub mod transport;
 pub mod tools;
 
 #[cfg(test)]

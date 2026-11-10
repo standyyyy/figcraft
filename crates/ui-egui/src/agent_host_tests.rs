@@ -30,6 +30,7 @@ fn start(host: &mut dyn AgentHost, turn: u64) -> figcraft_agent::run::CancelToke
         limits: Limits::default(),
         config: config(),
         history: Vec::new(),
+        cancel: figcraft_agent::run::CancelToken::new(),
     })))
 }
 
@@ -106,6 +107,7 @@ fn the_desktop_worker_reports_an_unreachable_provider_and_commits_nothing() {
         limits: Limits::default(),
         config,
         history: Vec::new(),
+        cancel: figcraft_agent::run::CancelToken::new(),
     })));
 
     let mut events = Vec::new();

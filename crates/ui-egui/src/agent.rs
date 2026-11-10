@@ -1046,6 +1046,9 @@ fn start_turn(app: &mut crate::FigApp, request: &str) {
         Some(h) => h,
         None => return,
     };
+    // One token per turn: the host runs with it and the panel stops with it, so Stop works the same
+    // on either platform.
+    let cancel = figcraft_agent::run::CancelToken::new();
     let token = host.start(crate::agent_host::HostRequest::Start(Box::new(crate::agent_host::TurnRequest {
         turn,
         request: request.to_string(),
@@ -1053,6 +1056,7 @@ fn start_turn(app: &mut crate::FigApp, request: &str) {
         limits: figcraft_agent::run::Limits::default(),
         config,
         history,
+        cancel,
     })));
     app.ui.agent_running.token = Some(token);
 }

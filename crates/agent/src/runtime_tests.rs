@@ -142,3 +142,56 @@ fn a_provider_error_is_summarized_not_dumped() {
         assert!(message.chars().count() < 400, "a failure message is summarized: {} chars", message.chars().count());
     }
 }
+
+// ---------- the driver both hosts advance ----------
+
+#[test]
+fn the_driver_reports_done_only_when_it_has_ended() {
+    // A browser polls this instead of blocking: it must not report done while the turn waits.
+    let live = live_session();
+    let shadow = Shadow::capture(&live).expect("capture");
+    let mut driver = crate::runtime::TurnDriver::start(turn(CancelToken::new()), shadow, &crate::EnvironmentCredentials);
+    assert_eq!(driver.poll(), crate::runtime::DriverStep::Pending, "a fresh driver is waiting");
+    // The provider is unreachable, so one step ends it.
+    let more = driver.drive_once();
+    assert!(!more, "the step ended the turn");
+    assert!(driver.is_done(), "and says so");
+    assert_eq!(driver.poll(), crate::runtime::DriverStep::Done);
+}
+
+#[test]
+fn a_driver_started_on_a_cancelled_turn_reports_cancelled_with_no_events() {
+    // Nothing began, so nothing is reported: no `Started`, and the terminal carries no envelope.
+    let live = live_session();
+    let shadow = Shadow::capture(&live).expect("capture");
+    let cancel = CancelToken::new();
+    cancel.cancel();
+    let mut driver = crate::runtime::TurnDriver::start(turn(cancel), shadow, &crate::EnvironmentCredentials);
+    assert!(driver.is_done(), "it is over before it began");
+    assert!(driver.take_events().is_empty(), "and said nothing");
+    let terminal = driver.finish();
+    assert!(matches!(terminal, TurnTerminal::Cancelled { .. }));
+    assert!(terminal.commit().is_none());
+}
+
+#[test]
+fn a_driver_hands_its_events_over_as_it_goes() {
+    // The browser drains these between steps, so they must be takeable without finishing.
+    let live = live_session();
+    let shadow = Shadow::capture(&live).expect("capture");
+    let mut driver = crate::runtime::TurnDriver::start(turn(CancelToken::new()), shadow, &crate::EnvironmentCredentials);
+    let first = driver.take_events();
+    assert!(matches!(first.as_slice(), [AgentEvent::Started { .. }]), "the start is reported first: {first:?}");
+    assert!(driver.take_events().is_empty(), "and taken only once");
+}
+
+#[test]
+fn a_driver_that_could_not_start_reports_a_terminal_and_no_replay() {
+    let live = live_session();
+    let shadow = Shadow::capture(&live).expect("capture");
+    let terminal = TurnTerminal::Failed { turn: 1, kind: AgentErrorKind::Configuration, message: "bad snapshot".into() };
+    let driver = crate::runtime::TurnDriver::from_terminal(terminal, shadow);
+    assert!(driver.is_done());
+    let terminal = driver.finish();
+    assert!(terminal.commit().is_none(), "a failure carries no envelope");
+}

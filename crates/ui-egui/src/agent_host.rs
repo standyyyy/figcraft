@@ -75,6 +75,8 @@ pub struct TurnRequest {
     pub config: figcraft_agent::AgentConfig,
     /// Rig's continuation messages from the previous turn, so a follow-up continues the thread.
     pub history: Vec<serde_json::Value>,
+    /// The token that stops this turn, so both hosts honour Stop the same way.
+    pub cancel: figcraft_agent::run::CancelToken,
 }
 
 /// What a host is asked to do.
@@ -114,6 +116,16 @@ pub trait AgentHost {
 
     /// A short description for diagnostics (`"desktop worker"`, `"browser"`).
     fn describe(&self) -> String;
+}
+
+/// Build a shadow `Session` from a snapshot's document JSON.
+///
+/// Both hosts do this, so it lives here: the desktop's worker thread and the browser's local future
+/// must build the same shadow from the same snapshot, or a turn would behave differently per platform.
+pub fn shadow_session_from_snapshot(snapshot: &Snapshot) -> Result<figcraft_engine::Session, String> {
+    let doc: figcraft_doc::Document =
+        serde_json::from_value(snapshot.document.clone()).map_err(|e| format!("the document snapshot could not be read: {e}"))?;
+    Ok(figcraft_engine::Session::with_document(doc))
 }
 
 /// A host that refuses every request: what a build without an Agent runtime uses (tests, and the

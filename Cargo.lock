@@ -2189,6 +2189,7 @@ dependencies = [
  "serde",
  "serde_json",
  "toml",
+ "wasm-bindgen-futures",
  "wat",
  "web-time",
 ]

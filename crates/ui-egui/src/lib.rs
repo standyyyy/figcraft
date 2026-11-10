@@ -19,6 +19,9 @@ pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
 pub mod a11y;
 pub mod agent;
 pub mod agent_host;
+/// The browser Agent host: one local future per turn, driven by the page's event loop.
+#[cfg(target_arch = "wasm32")]
+pub mod agent_local;
 /// The desktop Agent worker: one named thread per turn. Native only; the browser drives the same
 /// `AgentHost` interface with a local future instead.
 #[cfg(not(target_arch = "wasm32"))]

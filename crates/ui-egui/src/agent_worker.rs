@@ -222,7 +222,7 @@ fn run_turn(
 ) {
     // The shadow first: a document that does not parse is a configuration problem the user can act
     // on, not a crash.
-    let session = match shadow_from_snapshot(snapshot) {
+    let session = match crate::agent_host::shadow_session_from_snapshot(snapshot) {
         Ok(s) => s,
         Err(message) => {
             let terminal = figcraft_agent::TurnTerminal::Failed { turn, kind: AgentErrorKind::Configuration, message };
@@ -283,17 +283,6 @@ fn run_turn(
     if let Ok(mut slot) = terminal_slot.lock() {
         *slot = Some(terminal);
     }
-}
-
-/// Build a shadow `Session` from a snapshot's document JSON.
-fn shadow_from_snapshot(snapshot: &Snapshot) -> Result<figcraft_engine::Session, String> {
-    // The snapshot is what `inspect_document` reported; a document round-trips through the same JSON
-    // the format writes.
-    let doc: figcraft_doc::Document =
-        serde_json::from_value(snapshot.document.clone()).map_err(|e| format!("the document snapshot could not be read: {e}"))?;
-    let session = figcraft_engine::Session::with_document(doc);
-    let _ = snapshot.uid;
-    Ok(session)
 }
 
 fn push_event(events: &Arc<Mutex<Vec<AgentEvent>>>, event: AgentEvent) {

@@ -10,7 +10,9 @@
 //! chooses behaviour from a variant rather than from an error string.
 
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::task::Waker;
 
 use crate::AgentErrorKind;
 
@@ -102,9 +104,28 @@ impl AgentEvent {
 ///
 /// Cheap to clone: the UI holds one and the runner holds one, and either can stop the turn. Setting
 /// it twice is harmless, which is what makes cancellation idempotent.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct CancelToken {
-    cancelled: Arc<AtomicBool>,
+    /// The flag, and the one task waiting on it.
+    ///
+    /// A bare `AtomicBool` cannot wake a task parked in `stream.next().await`, so a browser Stop did
+    /// nothing until the provider next sent something. The waker is what makes cancellation *land*.
+    state: Arc<CancelState>,
+}
+
+/// The cancellation flag plus the waker of whoever is awaiting it.
+#[derive(Debug, Default)]
+struct CancelState {
+    cancelled: AtomicBool,
+    /// The waiting task, if any. A `Mutex` rather than `AtomicWaker` keeps this off a `#[doc(hidden)]`
+    /// futures API; contention is one cancel and one register.
+    waker: Mutex<Option<Waker>>,
+}
+
+impl Default for CancelToken {
+    fn default() -> Self {
+        Self { state: Arc::new(CancelState::default()) }
+    }
 }
 
 impl CancelToken {
@@ -113,13 +134,63 @@ impl CancelToken {
     }
 
     /// Ask the turn to stop. Safe to call more than once, and from any thread.
+    ///
+    /// Sets the flag first, then wakes the waiter: a waiter that registers between the two sees the
+    /// flag on its next poll, so the order is what makes the race safe.
     pub fn cancel(&self) {
-        self.cancelled.store(true, Ordering::SeqCst);
+        self.state.cancelled.store(true, Ordering::SeqCst);
+        let waker = match self.state.waker.lock() {
+            Ok(mut w) => w.take(),
+            Err(poisoned) => poisoned.into_inner().take(),
+        };
+        if let Some(waker) = waker {
+            waker.wake();
+        }
     }
 
     /// Whether the turn was asked to stop.
     pub fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::SeqCst)
+        self.state.cancelled.load(Ordering::SeqCst)
+    }
+
+    /// Resolves when the turn is asked to stop, waking a parked task when it happens.
+    ///
+    /// The flag is re-checked **after** the waker is registered: a cancel landing between the first
+    /// check and the registration would otherwise be lost, and the task would park forever.
+    pub fn cancelled(&self) -> Cancelled<'_> {
+        Cancelled { token: self }
+    }
+}
+
+/// The future [`CancelToken::cancelled`] returns.
+///
+/// Borrowed rather than owned so a token stays cheap to clone and no allocation is needed per wait.
+pub struct Cancelled<'a> {
+    token: &'a CancelToken,
+}
+
+impl std::future::Future for Cancelled<'_> {
+    type Output = ();
+
+    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<()> {
+        // Checked first: a cancel before this poll needs no waker at all.
+        if self.token.is_cancelled() {
+            return std::task::Poll::Ready(());
+        }
+        // Register, then check again. A cancel in between set the flag and found no waker (or this
+        // one), so the second check is what keeps it from being lost.
+        match self.token.state.waker.lock() {
+            Ok(mut w) => *w = Some(cx.waker().clone()),
+            Err(poisoned) => *poisoned.into_inner() = Some(cx.waker().clone()),
+        }
+        if self.token.is_cancelled() {
+            // Take the waker back: nobody will wake this task, and leaving it would keep it alive.
+            if let Ok(mut w) = self.token.state.waker.lock() {
+                *w = None;
+            }
+            return std::task::Poll::Ready(());
+        }
+        std::task::Poll::Pending
     }
 }
 

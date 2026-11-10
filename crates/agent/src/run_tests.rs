@@ -288,3 +288,72 @@ fn the_default_turn_budget_fits_a_real_screen() {
     assert!(rounds >= 40, "rounds: {rounds}");
     assert!(calls >= 100, "tool calls: {calls}");
 }
+
+// ---------- a cancellation that can wake an awaiting task ----------
+
+#[test]
+fn cancelling_before_awaiting_is_seen_at_once() {
+    // The common case: Stop arrives before the turn reaches its next await.
+    let token = CancelToken::new();
+    token.cancel();
+    assert!(token.is_cancelled());
+    let woken = futures::executor::block_on(async {
+        futures::future::select(std::pin::pin!(token.cancelled()), std::pin::pin!(std::future::pending::<()>())).await;
+        true
+    });
+    assert!(woken, "cancelled() returns when the flag is already set");
+}
+
+#[test]
+fn cancelling_while_awaiting_wakes_the_task() {
+    // The defect this pins: an `AtomicBool` cannot wake a task blocked in `stream.next().await`, so a
+    // browser Stop did nothing until the provider happened to send something.
+    let token = CancelToken::new();
+    let from_another_thread = token.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        from_another_thread.cancel();
+    });
+    let started = std::time::Instant::now();
+    futures::executor::block_on(token.cancelled());
+    assert!(started.elapsed() < std::time::Duration::from_secs(2), "woken promptly, not at the next provider chunk");
+    assert!(token.is_cancelled());
+}
+
+#[test]
+fn a_clone_shares_the_one_flag_and_wakes_the_waiter() {
+    // Cloned tokens must be *the same* cancellation: the UI holds one, the driver another.
+    let token = CancelToken::new();
+    let ui_side = token.clone();
+    let driver_side = token.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        ui_side.cancel();
+    });
+    futures::executor::block_on(driver_side.cancelled());
+    assert!(token.is_cancelled(), "all three see it");
+}
+
+#[test]
+fn cancelling_twice_is_harmless() {
+    let token = CancelToken::new();
+    token.cancel();
+    token.cancel();
+    assert!(token.is_cancelled());
+    // A waiter after the fact still returns rather than hanging.
+    futures::executor::block_on(token.cancelled());
+}
+
+#[test]
+fn a_cancel_that_races_the_register_is_not_lost() {
+    // The race `cancelled()` has to win: if the flag is set between the future first polling and its
+    // registering a waker, a naive implementation parks forever. Many iterations because it is a
+    // timing race, not a logic one.
+    for _ in 0..200 {
+        let token = CancelToken::new();
+        let other = token.clone();
+        std::thread::spawn(move || other.cancel());
+        futures::executor::block_on(token.cancelled());
+        assert!(token.is_cancelled());
+    }
+}

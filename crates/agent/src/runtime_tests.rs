@@ -246,3 +246,130 @@ fn a_connection_test_with_a_missing_credential_says_so_without_a_request() {
 fn figcraft_agent_env() -> crate::EnvironmentCredentials {
     crate::EnvironmentCredentials
 }
+
+// ---------- cancellation reaches a waiting driver ----------
+
+#[test]
+fn cancelling_wakes_a_driver_waiting_on_a_silent_provider() {
+    // The defect this pins: an `AtomicBool` could not wake a task parked in `stream.next().await`, so
+    // Stop did nothing until the provider happened to answer. The server below accepts the request and
+    // then says nothing, which is the exact case that used to hang.
+    //
+    // A refused connection will not do: it ends the turn before the cancel can land, and then the test
+    // proves nothing about waking.
+    let Some(server) = SilentServer::start() else {
+        eprintln!("skipped: no loopback listener available");
+        return;
+    };
+    let live = live_session();
+    let shadow = Shadow::capture(&live).expect("capture");
+    let cancel = CancelToken::new();
+    let mut t = turn(cancel.clone());
+    t.config = server.config();
+    let mut driver = crate::runtime::TurnDriver::start(t, shadow, &crate::EnvironmentCredentials);
+
+    // Cancel from another thread while the driver waits.
+    let from_elsewhere = cancel.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        from_elsewhere.cancel();
+    });
+
+    let started = std::time::Instant::now();
+    futures::executor::block_on(async {
+        while !driver.is_done() {
+            if !driver.drive_once_async().await && driver.is_done() {
+                break;
+            }
+        }
+    });
+    assert!(started.elapsed() < std::time::Duration::from_secs(5), "the wait ended promptly: {:?}", started.elapsed());
+
+    let terminal = driver.finish();
+    assert!(matches!(terminal, TurnTerminal::Cancelled { .. }), "cancelled, not failed or timed out: {terminal:?}");
+    assert!(terminal.commit().is_none(), "and it carries no envelope");
+}
+
+#[test]
+fn a_turn_past_its_deadline_ends_as_a_timeout_not_a_failure() {
+    // The deadline is part of the race, so an unreachable provider with a zero-second budget ends as a
+    // timeout rather than waiting for a connection that will never come.
+    let live = live_session();
+    let shadow = Shadow::capture(&live).expect("capture");
+    let mut t = turn(CancelToken::new());
+    t.limits.max_seconds = 0;
+    let mut driver = crate::runtime::TurnDriver::start(t, shadow, &crate::EnvironmentCredentials);
+
+    let started = std::time::Instant::now();
+    futures::executor::block_on(async {
+        while !driver.is_done() {
+            if !driver.drive_once_async().await && driver.is_done() {
+                break;
+            }
+        }
+    });
+    assert!(started.elapsed() < std::time::Duration::from_secs(5), "it did not wait for the provider");
+
+    let terminal = driver.finish();
+    match terminal {
+        TurnTerminal::LimitReached { kind, .. } => assert_eq!(kind, AgentErrorKind::Timeout),
+        other => panic!("expected a timeout, got {other:?}"),
+    }
+}
+
+/// A loopback HTTP listener that accepts a connection and then never answers.
+///
+/// Deterministic and local: no public address, no fixed port, nothing reached outside the test
+/// process. Dropped at the end, which closes the listener.
+struct SilentServer {
+    port: u16,
+    stopped: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl SilentServer {
+    /// Start it, or `None` if no port could be bound.
+    fn start() -> Option<Self> {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").ok()?;
+        listener.set_nonblocking(true).ok()?;
+        let port = listener.local_addr().ok()?.port();
+        let stopped = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = std::sync::Arc::clone(&stopped);
+        let handle = std::thread::spawn(move || {
+            // Accept, then hold the connection open saying nothing: the wait a cancel has to break.
+            let mut held = Vec::new();
+            while !flag.load(std::sync::atomic::Ordering::Relaxed) {
+                match listener.accept() {
+                    Ok((stream, _)) => held.push(stream),
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(std::time::Duration::from_millis(2));
+                    }
+                    Err(_) => break,
+                }
+            }
+            drop(held);
+        });
+        Some(Self { port, stopped, handle: Some(handle) })
+    }
+
+    /// A config pointing at it.
+    fn config(&self) -> AgentConfig {
+        let prefs = figcraft_engine::prefs::AgentPrefs {
+            enabled: true,
+            base_url: format!("http://127.0.0.1:{}/v1", self.port),
+            model: "silent".into(),
+            timeout_seconds: 60,
+            ..figcraft_engine::prefs::AgentPrefs::default()
+        };
+        AgentConfig::from_prefs(&prefs).expect("valid config")
+    }
+}
+
+impl Drop for SilentServer {
+    fn drop(&mut self) {
+        self.stopped.store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
+        }
+    }
+}

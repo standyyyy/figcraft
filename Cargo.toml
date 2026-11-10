@@ -46,6 +46,9 @@ rig-core = { version = "=0.44.0", default-features = false, features = ["reqwest
 ureq = { version = "3.5", default-features = false, features = ["rustls", "gzip"] }
 # Polling Rig's agent stream from a blocking thread (the stream is a futures 0.3 Stream).
 futures = { version = "0.3", default-features = false, features = ["std", "executor"] }
+# A portable delay for the turn deadline: it uses the browser timer on WASM and a thread on native,
+# so one absolute deadline bounds the wait on both platforms.
+futures-timer = "=3.0.3"
 
 # Keep coupled craft-libs crates on one rev. craft-update has no sibling-crate
 # dependencies and is pinned separately for the suite updater rollout.

@@ -16,6 +16,7 @@
 
 use figcraft_agent_tools::ToolPolicy;
 use futures::StreamExt;
+use futures::future::Either;
 use rig_agent::AgentBuilder;
 use rig_agent::agent::MultiTurnStreamItem;
 use rig_core::providers::openai::OpenAIConfig;
@@ -110,6 +111,11 @@ pub struct TurnDriver {
     /// Rig's stream, driven one item at a time.
     stream: rig_agent::agent::StreamingResult,
     started: std::time::Instant,
+    /// The absolute instant this turn must end by, set when it started.
+    ///
+    /// One deadline for the whole turn: recomputing a full timeout per stream item would let a slow
+    /// provider keep it alive indefinitely.
+    deadline: std::time::Instant,
     answer: String,
     tool_calls: u32,
     rounds: u32,
@@ -189,6 +195,7 @@ impl TurnDriver {
             tools,
             stream,
             started: std::time::Instant::now(),
+            deadline: std::time::Instant::now() + std::time::Duration::from_secs(u64::from(limits.max_seconds)),
             answer: String::new(),
             tool_calls: 0,
             rounds: 0,
@@ -212,6 +219,7 @@ impl TurnDriver {
             tools: ShadowTools::new(shadow, ToolPolicy::EmbeddedAgent),
             stream: Box::pin(futures::stream::empty()),
             started: std::time::Instant::now(),
+            deadline: std::time::Instant::now() + std::time::Duration::from_secs(u64::from(limits.max_seconds)),
             answer: String::new(),
             tool_calls: 0,
             rounds: 0,
@@ -238,6 +246,7 @@ impl TurnDriver {
             tools: ShadowTools::new(shadow, ToolPolicy::EmbeddedAgent),
             stream: Box::pin(futures::stream::empty()),
             started: std::time::Instant::now(),
+            deadline: std::time::Instant::now() + std::time::Duration::from_secs(u64::from(Limits::default().max_seconds)),
             answer: String::new(),
             tool_calls: 0,
             rounds: 0,
@@ -279,6 +288,7 @@ impl TurnDriver {
             // An empty stream: nothing will be polled because the outcome is already set.
             stream: Box::pin(futures::stream::empty()),
             started: std::time::Instant::now(),
+            deadline: std::time::Instant::now() + std::time::Duration::from_secs(u64::from(limits.max_seconds)),
             answer: String::new(),
             tool_calls: 0,
             rounds: 0,
@@ -348,16 +358,42 @@ impl TurnDriver {
         if self.outcome.is_some() {
             return false;
         }
-        if self.cancel.is_cancelled() {
-            self.outcome = Some(StreamOutcome::Cancelled);
-            return false;
-        }
-        if self.started.elapsed() >= std::time::Duration::from_secs(u64::from(self.limits.max_seconds)) {
-            self.outcome =
-                Some(StreamOutcome::Limited(AgentErrorKind::Timeout, format!("the turn ran past its {} second limit", self.limits.max_seconds)));
-            return false;
-        }
-        let item = match self.stream.next().await {
+        // Three things can end the wait: the provider producing an item, the user stopping the turn,
+        // or the deadline passing. Racing them is what makes Stop and the timeout land while the
+        // provider is silent -- awaiting the stream alone cannot be interrupted, which is the defect
+        // this replaces.
+        let item = {
+            // The stream is taken out and put back: the race borrows it mutably while also assigning
+            // `self.outcome`, and a stream that loses the race stays droppable -- dropping the losing
+            // provider future is what cancels the local request.
+            let mut stream = std::mem::replace(&mut self.stream, Box::pin(futures::stream::empty()));
+            let next = stream.next();
+            let wait_for_cancel = self.cancel.cancelled();
+            let wait_for_deadline = deadline_at(self.deadline);
+            futures::pin_mut!(next, wait_for_cancel, wait_for_deadline);
+            match futures::future::select(futures::future::select(next, wait_for_cancel), wait_for_deadline).await {
+                // A stream item, or the stream ending.
+                Either::Left((Either::Left((item, _)), _)) => {
+                    self.stream = stream;
+                    item
+                }
+                // Cancelled: stop the turn before anything else looks at the item. The stream is
+                // dropped, which cancels the local HTTP request.
+                Either::Left((Either::Right(((), _)), _)) => {
+                    self.outcome = Some(StreamOutcome::Cancelled);
+                    return false;
+                }
+                // The deadline passed, likewise dropping the request.
+                Either::Right(((), _)) => {
+                    self.outcome = Some(StreamOutcome::Limited(
+                        AgentErrorKind::Timeout,
+                        format!("the turn ran past its {} second limit", self.limits.max_seconds),
+                    ));
+                    return false;
+                }
+            }
+        };
+        let item = match item {
             Some(Ok(i)) => i,
             Some(Err(e)) => {
                 let message = e.to_string();
@@ -446,6 +482,21 @@ impl TurnDriver {
     pub fn turn(&self) -> u64 {
         self.turn
     }
+}
+
+/// A future that resolves when `deadline` passes.
+///
+/// Takes the instant rather than the driver, so the race does not borrow the whole value and can
+/// still assign its outcome. One deadline per turn, set when it started: a fresh full timeout per SSE
+/// chunk or per tool round would let a slow provider keep a turn alive forever.
+fn deadline_at(deadline: std::time::Instant) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()>>> {
+    Box::pin(async move {
+        let now = std::time::Instant::now();
+        if now >= deadline {
+            return;
+        }
+        futures_timer::Delay::new(deadline - now).await;
+    })
 }
 
 /// How the stream ended, before the shadow is taken.

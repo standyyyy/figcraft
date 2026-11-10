@@ -1029,6 +1029,8 @@ fn start_turn(app: &mut crate::FigApp, request: &str) {
     if let Some(panel) = app.ui.agent.as_mut() {
         panel.begin_turn(turn, request);
     }
+    // Read before the host borrow: it needs the session and the transcript.
+    let history = continuation_for(app);
     let host = match app.ui.agent_host.as_mut() {
         Some(h) => h,
         None => return,
@@ -1039,6 +1041,7 @@ fn start_turn(app: &mut crate::FigApp, request: &str) {
         snapshot,
         limits: figcraft_agent::run::Limits::default(),
         config,
+        history,
     })));
     app.ui.agent_running.token = Some(token);
 }
@@ -1090,6 +1093,13 @@ pub fn poll_host(app: &mut crate::FigApp) {
         // success can have committed anything, and `apply_terminal` has done that already.
         if let Some(panel) = app.ui.agent.as_ref() {
             record_turn(&mut app.ui.agent_transcript, panel, &terminal);
+        }
+        // A success carries Rig's transcript of the run: keep it for the next turn's history.
+        if let figcraft_agent::TurnTerminal::Success { continuation, .. } = &terminal
+            && !continuation.is_empty()
+            && let Some(convo) = app.ui.agent_transcript.conversations.last_mut()
+        {
+            convo.continuation = continuation.clone();
         }
         store_transcript(app);
     }
@@ -1333,7 +1343,12 @@ pub(crate) fn begin_transcript_turn(transcript: &mut figcraft_agent::history::Tr
     let convo = match transcript.conversations.iter_mut().find(|c| c.id == conversation) {
         Some(c) => c,
         None => {
-            transcript.conversations.push(figcraft_agent::history::Conversation { id: conversation.to_string(), turns: Vec::new(), summary: None });
+            transcript.conversations.push(figcraft_agent::history::Conversation {
+                id: conversation.to_string(),
+                turns: Vec::new(),
+                summary: None,
+                continuation: Vec::new(),
+            });
             // The stored transcript is capped, so the oldest conversations go when it grows.
             let max = figcraft_format::agent::MAX_CONVERSATIONS;
             while transcript.conversations.len() > max {
@@ -1372,4 +1387,13 @@ fn record_turn(transcript: &mut figcraft_agent::history::Transcript, panel: &Age
             return;
         }
     }
+}
+
+/// The continuation messages the open conversation should hand to the next turn.
+///
+/// Rig's transcript of the last finished turn, so a follow-up sees the tool calls and results rather
+/// than only the visible text. Empty when the conversation has not produced a run yet.
+fn continuation_for(app: &mut crate::FigApp) -> Vec<serde_json::Value> {
+    let conversation = conversation_id_of(app);
+    app.ui.agent_transcript.conversations.iter().find(|c| c.id == conversation).map(|c| c.continuation.clone()).unwrap_or_default()
 }

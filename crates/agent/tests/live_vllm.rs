@@ -40,6 +40,11 @@ fn live_config() -> Option<(AgentConfig, Option<String>)> {
     Some((config, credential))
 }
 
+/// A shadow of `session`'s document, as the app builds one for each turn.
+fn shadow_of(session: &figcraft_engine::Session) -> Shadow {
+    Shadow::capture(session).expect("capture")
+}
+
 /// A disposable synthetic document, as a shadow the turn edits.
 fn shadow() -> Shadow {
     let mut s = figcraft_engine::Session::new();
@@ -48,7 +53,7 @@ fn shadow() -> Shadow {
 }
 
 fn turn(config: AgentConfig, request: &str, cancel: CancelToken) -> Turn {
-    Turn { turn: 1, request: request.into(), document_uid: 1, base_revision: 1, config, limits: Limits::default(), cancel }
+    Turn { turn: 1, request: request.into(), document_uid: 1, base_revision: 1, config, limits: Limits::default(), cancel, history: Vec::new() }
 }
 
 #[test]
@@ -134,4 +139,77 @@ fn cancelling_mid_turn_commits_nothing() {
     assert!(terminal.commit().is_none(), "a cancelled turn carries no envelope");
     assert!(matches!(terminal, TurnTerminal::Cancelled { .. }), "got {terminal:?}");
     println!("live: cancellation committed nothing");
+}
+
+#[test]
+#[ignore = "needs FIGCRAFT_AI_BASE_URL and FIGCRAFT_AI_MODEL; set them to run against a real endpoint"]
+fn a_follow_up_turn_continues_the_previous_one() {
+    let Some((config, credential)) = live_config() else {
+        eprintln!("skipped: set FIGCRAFT_AI_BASE_URL and FIGCRAFT_AI_MODEL to run this");
+        return;
+    };
+    // One document across both turns: the second turn's shadow is what the first turn produced, which
+    // is what the app does (each turn snapshots the live document). A fresh empty shadow would make
+    // the history and the document contradict each other, and the model would answer about the empty
+    // one -- correct behaviour, wrong test.
+    let mut session = figcraft_engine::Session::new();
+    session.execute("file.new", &json!({})).expect("file.new");
+
+    let mut first_events = Vec::new();
+    let first = run(
+        turn(config.clone(), "Create a rectangle 20 wide and 20 tall at 0,0.", CancelToken::new()),
+        shadow_of(&session),
+        credential.as_deref(),
+        &mut |e| first_events.push(e),
+    );
+    let (continuation, replay) = match &first {
+        TurnTerminal::Success { continuation, commit, .. } => (continuation.clone(), commit.as_ref().map(|c| c.batch_commands()).unwrap_or_default()),
+        other => panic!("the first turn must succeed, got {other:?}"),
+    };
+    println!("live: first turn produced {} continuation messages", continuation.len());
+    assert!(!continuation.is_empty(), "a finished run returns its transcript for the next turn");
+
+    // Apply the first turn's edits, so the document holds what the history says it holds.
+    if !replay.is_empty() {
+        session.execute("command.batch", &json!({"commands": replay})).expect("apply the first turn");
+    }
+    let layers = session.doc().expect("doc").nodes().count();
+    println!("live: the document now holds {layers} layers");
+
+    // The follow-up gets those messages as history and a shadow of the document they describe.
+    let mut t = turn(config, "How many layers did you create? Answer with the number only.", CancelToken::new());
+    t.history = continuation.clone();
+    let mut second_events = Vec::new();
+    let second = run(t, shadow_of(&session), credential.as_deref(), &mut |e| second_events.push(e));
+    match &second {
+        TurnTerminal::Success { answer, .. } => {
+            let shown: String = answer.chars().take(120).collect();
+            println!("live: follow-up answered {shown:?}");
+            assert!(!answer.is_empty(), "the follow-up answered");
+        }
+        other => panic!("the follow-up must succeed, got {other:?}"),
+    }
+    println!("live: the continuation was accepted by Rig and the follow-up completed");
+}
+
+#[test]
+#[ignore = "needs FIGCRAFT_AI_BASE_URL and FIGCRAFT_AI_MODEL; set them to run against a real endpoint"]
+fn a_stored_continuation_round_trips_through_json() {
+    let Some((config, credential)) = live_config() else {
+        eprintln!("skipped: set FIGCRAFT_AI_BASE_URL and FIGCRAFT_AI_MODEL to run this");
+        return;
+    };
+    let mut events = Vec::new();
+    let first = run(turn(config.clone(), "Say exactly: OK", CancelToken::new()), shadow(), credential.as_deref(), &mut |e| events.push(e));
+    let continuation = match &first {
+        TurnTerminal::Success { continuation, .. } => continuation.clone(),
+        other => panic!("expected a success, got {other:?}"),
+    };
+    // The stored form is plain JSON: serialize it fully, read it back, and convert to Rig messages.
+    let as_text = serde_json::to_string(&continuation).expect("the continuation is plain JSON");
+    let reparsed: Vec<serde_json::Value> = serde_json::from_str(&as_text).expect("and parses back");
+    assert_eq!(reparsed.len(), continuation.len(), "every message survived the round trip");
+    let messages = figcraft_agent::history::continuation_messages(&reparsed);
+    assert_eq!(messages.len(), reparsed.len(), "and every message is valid Rig history");
+    println!("live: {} messages round-tripped through JSON and back into Rig", messages.len());
 }

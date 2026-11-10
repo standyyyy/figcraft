@@ -2,6 +2,7 @@
 
 use crate::history::{Conversation, TRANSCRIPT_VERSION, Transcript, compact, context_for_model, estimated_chars};
 use crate::run::{AgentEvent, AgentRun, Limits, Outcome};
+use serde_json::json;
 
 fn limits() -> Limits {
     Limits::default()
@@ -233,4 +234,60 @@ fn the_transcript_estimate_adds_up_its_conversations() {
     let each: usize = t.conversations.iter().map(Conversation::estimated_chars).sum();
     assert_eq!(t.estimated_chars(), each);
     assert!(t.estimated_chars() > 0);
+}
+
+// ---------- Rig continuation across turns ----------
+
+#[test]
+fn a_conversation_carries_the_continuation_it_was_stored_with() {
+    // The messages Rig returns from a run are what lets a follow-up see the turn before it. They are
+    // stored as plain JSON so the schema stays ours and `figcraft-format` never learns about Rig.
+    let mut convo = Conversation::new("doc-1");
+    convo.continuation = vec![
+        json!({"role": "user", "content": [{"type": "text", "text": "draw a card"}]}),
+        json!({"role": "assistant", "content": [{"type": "text", "text": "done"}]}),
+    ];
+    let mut transcript = Transcript::default();
+    transcript.conversations.push(convo);
+
+    // Through the stored form and back.
+    let stored = transcript.to_agent_data();
+    let back = Transcript::from_agent_data(&stored);
+    assert_eq!(back.conversations[0].continuation.len(), 2, "the continuation round-tripped");
+}
+
+#[test]
+fn an_unreadable_continuation_message_is_dropped_not_fatal() {
+    // A stored value an older or future schema wrote must not refuse the turn: the conversation
+    // continues from the visible transcript with whatever is still readable.
+    let stored =
+        vec![json!({"role": "user", "content": [{"type": "text", "text": "keep me"}]}), json!({"role": "not-a-real-role", "content": "drop me"})];
+    let messages = crate::history::continuation_messages(&stored);
+    assert_eq!(messages.len(), 1, "the good message survived, the bad one was dropped");
+    assert!(!crate::history::continuation_is_intact(&stored), "and the reader can say it was not intact");
+}
+
+#[test]
+fn a_wholly_unreadable_continuation_yields_an_empty_history() {
+    // Nothing readable: an empty history is the safe answer, not an error.
+    let stored = vec![json!({"nonsense": true})];
+    assert!(crate::history::continuation_messages(&stored).is_empty());
+    assert!(!crate::history::continuation_is_intact(&stored));
+}
+
+#[test]
+fn an_empty_continuation_is_intact() {
+    // A conversation that has not run anything yet has nothing to continue, and that is not damage.
+    assert!(crate::history::continuation_messages(&[]).is_empty());
+    assert!(crate::history::continuation_is_intact(&[]));
+}
+
+#[test]
+fn a_turn_with_no_continuation_stores_none() {
+    // The stored form omits the field rather than writing an empty array, so a transcript from a
+    // build without continuation reads back with an empty one.
+    let transcript = Transcript::default();
+    let stored = transcript.to_agent_data();
+    let text = serde_json::to_string(&stored.json).expect("serialize");
+    assert!(!text.contains("continuation"), "an empty continuation is not written: {text}");
 }

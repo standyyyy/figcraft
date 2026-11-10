@@ -29,6 +29,7 @@ fn start(host: &mut dyn AgentHost, turn: u64) -> figcraft_agent::run::CancelToke
         snapshot: snapshot(),
         limits: Limits::default(),
         config: config(),
+        history: Vec::new(),
     })))
 }
 
@@ -104,6 +105,7 @@ fn the_desktop_worker_reports_an_unreachable_provider_and_commits_nothing() {
         snapshot: snapshot(),
         limits: Limits::default(),
         config,
+        history: Vec::new(),
     })));
 
     let mut events = Vec::new();
@@ -173,15 +175,17 @@ fn only_a_successful_outcome_exposes_a_commit() {
         vec![figcraft_agent::shadow::ReplayStep { command: "node.create".into(), params: serde_json::json!({}) }],
         "AI: x",
     );
-    outcome.terminal = Some(figcraft_agent::TurnTerminal::Success { turn: 1, answer: "d".into(), commit: Some(envelope) });
+    outcome.terminal = Some(figcraft_agent::TurnTerminal::Success { turn: 1, answer: "d".into(), commit: Some(envelope), continuation: Vec::new() });
     assert!(outcome.commit().is_some(), "a success exposes its envelope");
 }
 
 #[test]
 fn a_success_without_edits_exposes_no_commit() {
     // A read-only turn succeeds and changes nothing; there is no envelope to apply.
-    let outcome =
-        TurnOutcome { events: Vec::new(), terminal: Some(figcraft_agent::TurnTerminal::Success { turn: 1, answer: "looked".into(), commit: None }) };
+    let outcome = TurnOutcome {
+        events: Vec::new(),
+        terminal: Some(figcraft_agent::TurnTerminal::Success { turn: 1, answer: "looked".into(), commit: None, continuation: Vec::new() }),
+    };
     assert!(outcome.is_finished());
     assert!(outcome.commit().is_none());
 }

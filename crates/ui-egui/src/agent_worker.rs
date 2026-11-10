@@ -32,6 +32,8 @@ struct RunJob {
     snapshot: Snapshot,
     limits: Limits,
     config: AgentConfig,
+    /// Continuation messages from the previous turn in this conversation.
+    history: Vec<serde_json::Value>,
     cancel: CancelToken,
 }
 
@@ -144,6 +146,7 @@ impl AgentHost for WorkerHost {
                     snapshot: req.snapshot,
                     limits: req.limits,
                     config: req.config,
+                    history: req.history,
                     cancel: cancel.clone(),
                 }));
                 let sent = self.jobs.as_ref().is_some_and(|tx| tx.send(job).is_ok());
@@ -195,7 +198,7 @@ fn worker_loop(rx: Receiver<Job>, events: Arc<Mutex<Vec<AgentEvent>>>, terminal:
         match job {
             Job::Stop => break,
             Job::Run(job) => {
-                run_turn(job.turn, &job.request, &job.snapshot, &job.limits, &job.config, &job.cancel, &events, &terminal);
+                run_turn(job.turn, &job.request, &job.snapshot, &job.limits, &job.config, &job.history, &job.cancel, &events, &terminal);
             }
         }
     }
@@ -212,6 +215,7 @@ fn run_turn(
     snapshot: &Snapshot,
     limits: &Limits,
     config: &AgentConfig,
+    history: &[serde_json::Value],
     cancel: &CancelToken,
     events: &Arc<Mutex<Vec<AgentEvent>>>,
     terminal_slot: &Arc<Mutex<Option<figcraft_agent::TurnTerminal>>>,
@@ -255,6 +259,7 @@ fn run_turn(
             config: config.clone(),
             limits: *limits,
             cancel: cancel.clone(),
+            history: history.to_vec(),
         },
         shadow,
         credential.as_deref(),

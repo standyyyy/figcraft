@@ -365,7 +365,15 @@ impl Scripted {
             })
             .collect();
         let envelope = figcraft_agent::CommitEnvelope::new(1, uid, revision, steps, "AI: draw");
-        Self { terminal: Some(figcraft_agent::TurnTerminal::Success { turn: 1, answer: "done".into(), commit: Some(envelope) }), ..Self::new() }
+        Self {
+            terminal: Some(figcraft_agent::TurnTerminal::Success {
+                turn: 1,
+                answer: "done".into(),
+                commit: Some(envelope),
+                continuation: Vec::new(),
+            }),
+            ..Self::new()
+        }
     }
 }
 
@@ -569,8 +577,12 @@ fn a_matching_envelope_commits_as_one_undo_step() {
         params: serde_json::json!({"type": "rectangle", "width": 10.0, "height": 10.0}),
     };
     let envelope = figcraft_agent::CommitEnvelope::new(1, uid, revision, vec![step], "AI: draw");
-    app.ui.agent_host =
-        Some(Box::new(TerminalHost(Some(figcraft_agent::TurnTerminal::Success { turn: 1, answer: "done".into(), commit: Some(envelope) }))));
+    app.ui.agent_host = Some(Box::new(TerminalHost(Some(figcraft_agent::TurnTerminal::Success {
+        turn: 1,
+        answer: "done".into(),
+        commit: Some(envelope),
+        continuation: Vec::new(),
+    }))));
     let before = app.session.doc().expect("doc").nodes().count();
 
     crate::agent::poll_host(&mut app);
@@ -592,8 +604,12 @@ fn a_stale_revision_is_refused_and_nothing_is_applied() {
     let step = figcraft_agent::shadow::ReplayStep { command: "node.create".into(), params: serde_json::json!({"type": "ellipse"}) };
     // Built against a revision the document no longer has.
     let envelope = figcraft_agent::CommitEnvelope::new(1, uid, revision + 5, vec![step], "AI: draw");
-    app.ui.agent_host =
-        Some(Box::new(TerminalHost(Some(figcraft_agent::TurnTerminal::Success { turn: 1, answer: "done".into(), commit: Some(envelope) }))));
+    app.ui.agent_host = Some(Box::new(TerminalHost(Some(figcraft_agent::TurnTerminal::Success {
+        turn: 1,
+        answer: "done".into(),
+        commit: Some(envelope),
+        continuation: Vec::new(),
+    }))));
     let before = app.session.doc().expect("doc").nodes().count();
     let depth = app.session.undo_depth();
 
@@ -615,8 +631,12 @@ fn an_envelope_for_another_document_is_refused() {
     }
     let step = figcraft_agent::shadow::ReplayStep { command: "node.create".into(), params: serde_json::json!({"type": "ellipse"}) };
     let envelope = figcraft_agent::CommitEnvelope::new(1, uid + 99, revision, vec![step], "AI: draw");
-    app.ui.agent_host =
-        Some(Box::new(TerminalHost(Some(figcraft_agent::TurnTerminal::Success { turn: 1, answer: "done".into(), commit: Some(envelope) }))));
+    app.ui.agent_host = Some(Box::new(TerminalHost(Some(figcraft_agent::TurnTerminal::Success {
+        turn: 1,
+        answer: "done".into(),
+        commit: Some(envelope),
+        continuation: Vec::new(),
+    }))));
     let before = app.session.doc().expect("doc").nodes().count();
 
     crate::agent::poll_host(&mut app);
@@ -635,8 +655,12 @@ fn a_late_result_from_an_older_turn_is_refused() {
     }
     let step = figcraft_agent::shadow::ReplayStep { command: "node.create".into(), params: serde_json::json!({"type": "star"}) };
     let envelope = figcraft_agent::CommitEnvelope::new(3, uid, revision, vec![step], "AI: the older one");
-    app.ui.agent_host =
-        Some(Box::new(TerminalHost(Some(figcraft_agent::TurnTerminal::Success { turn: 3, answer: "old".into(), commit: Some(envelope) }))));
+    app.ui.agent_host = Some(Box::new(TerminalHost(Some(figcraft_agent::TurnTerminal::Success {
+        turn: 3,
+        answer: "old".into(),
+        commit: Some(envelope),
+        continuation: Vec::new(),
+    }))));
     let before = app.session.doc().expect("doc").nodes().count();
 
     crate::agent::poll_host(&mut app);
@@ -701,8 +725,12 @@ fn a_finished_turn_records_its_outcome_and_keeps_it_out_of_undo() {
         params: serde_json::json!({"type": "rectangle", "width": 10.0, "height": 10.0}),
     };
     let envelope = figcraft_agent::CommitEnvelope::new(turn, uid, revision, vec![step], "AI: draw");
-    app.ui.agent_host =
-        Some(Box::new(TerminalHost(Some(figcraft_agent::TurnTerminal::Success { turn, answer: "done".into(), commit: Some(envelope) }))));
+    app.ui.agent_host = Some(Box::new(TerminalHost(Some(figcraft_agent::TurnTerminal::Success {
+        turn,
+        answer: "done".into(),
+        commit: Some(envelope),
+        continuation: Vec::new(),
+    }))));
     crate::agent::poll_host(&mut app);
 
     let turns: Vec<&figcraft_agent::run::AgentRun> = app.ui.agent_transcript.conversations.iter().flat_map(|c| c.turns.iter()).collect();

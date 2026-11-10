@@ -27,7 +27,16 @@ fn live_session() -> figcraft_engine::Session {
 }
 
 fn turn(cancel: CancelToken) -> Turn {
-    Turn { turn: 1, request: "draw".into(), document_uid: 7, base_revision: 3, config: config(), limits: Limits::default(), cancel }
+    Turn {
+        turn: 1,
+        request: "draw".into(),
+        document_uid: 7,
+        base_revision: 3,
+        config: config(),
+        limits: Limits::default(),
+        cancel,
+        history: Vec::new(),
+    }
 }
 
 #[test]
@@ -105,7 +114,7 @@ fn every_stream_ending_is_a_distinct_terminal() {
     // The mapping must be total: whichever way the stream stops, exactly one terminal comes back and
     // only a success can carry an envelope.
     let cases: Vec<TurnTerminal> = vec![
-        TurnTerminal::Success { turn: 1, answer: "x".into(), commit: None },
+        TurnTerminal::Success { turn: 1, answer: "x".into(), commit: None, continuation: Vec::new() },
         TurnTerminal::Failed { turn: 1, kind: AgentErrorKind::Protocol, message: "bad".into() },
         TurnTerminal::Cancelled { turn: 1 },
         TurnTerminal::LimitReached { turn: 1, kind: AgentErrorKind::Model, message: "rounds".into() },

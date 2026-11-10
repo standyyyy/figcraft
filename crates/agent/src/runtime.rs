@@ -46,6 +46,11 @@ pub struct Turn {
     pub limits: Limits,
     /// Cooperative cancellation.
     pub cancel: CancelToken,
+    /// The messages the previous turn ended with, so a follow-up sees its tool calls and results.
+    ///
+    /// Already validated by [`crate::history::continuation_messages`]: anything Rig would not accept
+    /// has been dropped, so this is either usable or empty.
+    pub history: Vec<serde_json::Value>,
 }
 
 /// Run one turn, reporting progress through `emit`, and return how it ended.
@@ -76,6 +81,8 @@ pub fn run(turn: Turn, shadow: Shadow, credential: Option<&str>, emit: &mut dyn 
     // Tool names in the order Rig reported their calls: a result names no tool, so the queue pairs
     // them the way the stream emits them (Rig surfaces results in call order).
     let mut pending_tools: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+    // Rig's messages from the finished run, handed back for the next turn.
+    let mut continuation: Vec<serde_json::Value> = Vec::new();
 
     // Rig owns the tool loop, so its turn budget is FigCraft's round budget: without this Rig keeps
     // its own default of one model call, which a single tool call exhausts.
@@ -137,7 +144,13 @@ pub fn run(turn: Turn, shadow: Shadow, credential: Option<&str>, emit: &mut dyn 
                         );
                     }
                 }
-                MultiTurnStreamItem::FinalResponse(_) => return StreamOutcome::Answered,
+                MultiTurnStreamItem::FinalResponse(response) => {
+                    // Rig's transcript of the run: the prompt, every assistant turn and every
+                    // committed tool result. Keeping it is what lets a follow-up continue the
+                    // conversation instead of starting over from the visible text.
+                    continuation = serde_json::to_value(&response.messages).ok().and_then(|v| v.as_array().cloned()).unwrap_or_default();
+                    return StreamOutcome::Answered;
+                }
                 _ => {}
             }
         }
@@ -145,7 +158,7 @@ pub fn run(turn: Turn, shadow: Shadow, credential: Option<&str>, emit: &mut dyn 
     });
 
     match outcome {
-        StreamOutcome::Answered => finish_success(turn_no, turn.document_uid, turn.base_revision, tools, &turn.request, answer),
+        StreamOutcome::Answered => finish_success(turn_no, turn.document_uid, turn.base_revision, tools, &turn.request, answer, continuation),
         StreamOutcome::Cancelled => TurnTerminal::Cancelled { turn: turn_no },
         StreamOutcome::Limited(kind, message) => TurnTerminal::LimitReached { turn: turn_no, kind, message },
         StreamOutcome::Failed(kind, message) => TurnTerminal::Failed { turn: turn_no, kind, message },
@@ -160,10 +173,18 @@ enum StreamOutcome {
     Failed(AgentErrorKind, String),
 }
 
-fn finish_success(turn: u64, uid: u64, revision: u64, tools: ShadowTools, request: &str, answer: String) -> TurnTerminal {
+fn finish_success(
+    turn: u64,
+    uid: u64,
+    revision: u64,
+    tools: ShadowTools,
+    request: &str,
+    answer: String,
+    continuation: Vec<serde_json::Value>,
+) -> TurnTerminal {
     let replay = tools.into_shadow().map(|s| s.replay().to_vec()).unwrap_or_default();
     let commit = if replay.is_empty() { None } else { Some(CommitEnvelope::new(turn, uid, revision, replay, crate::shadow::undo_label(request))) };
-    TurnTerminal::Success { turn, answer, commit }
+    TurnTerminal::Success { turn, answer, commit, continuation }
 }
 
 /// Classify a Rig error by what a person can do about it.

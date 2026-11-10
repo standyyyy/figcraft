@@ -73,6 +73,8 @@ pub struct TurnRequest {
     pub snapshot: Snapshot,
     pub limits: Limits,
     pub config: figcraft_agent::AgentConfig,
+    /// Rig's continuation messages from the previous turn, so a follow-up continues the thread.
+    pub history: Vec<serde_json::Value>,
 }
 
 /// What a host is asked to do.

@@ -16,7 +16,7 @@ fn envelope(turn: u64, uid: u64, revision: u64) -> CommitEnvelope {
 
 #[test]
 fn only_success_exposes_a_commit() {
-    let success = TurnTerminal::Success { turn: 1, answer: "done".into(), commit: Some(envelope(1, 7, 3)) };
+    let success = TurnTerminal::Success { turn: 1, answer: "done".into(), commit: Some(envelope(1, 7, 3)), continuation: Vec::new() };
     assert!(success.commit().is_some(), "a success carries its envelope");
     assert!(success.is_success());
     assert_eq!(success.message(), None, "a success has an answer, not a message");

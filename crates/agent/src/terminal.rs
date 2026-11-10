@@ -76,7 +76,11 @@ impl CommitEnvelope {
 #[derive(Clone, Debug, PartialEq)]
 pub enum TurnTerminal {
     /// The model answered. `commit` is `None` when the turn changed nothing.
-    Success { turn: u64, answer: String, commit: Option<CommitEnvelope> },
+    ///
+    /// `continuation` is Rig's transcript of the run, for the next turn's history. It travels with a
+    /// success only: a failed or cancelled turn has no run to continue from, and seeding the next
+    /// turn with half a conversation would confuse the model about what happened.
+    Success { turn: u64, answer: String, commit: Option<CommitEnvelope>, continuation: Vec<serde_json::Value> },
     /// It failed: a provider error, a tool failure, a malformed answer.
     Failed { turn: u64, kind: AgentErrorKind, message: String },
     /// It was cancelled.
@@ -177,7 +181,7 @@ impl TurnProgress {
     pub fn finish(self, turn: u64, document_uid: u64, base_revision: u64, undo_label: impl Into<String>) -> TurnTerminal {
         let replay = self.shadow.map(|s| s.replay().to_vec()).unwrap_or_default();
         let commit = if replay.is_empty() { None } else { Some(CommitEnvelope::new(turn, document_uid, base_revision, replay, undo_label)) };
-        TurnTerminal::Success { turn, answer: self.answer, commit }
+        TurnTerminal::Success { turn, answer: self.answer, commit, continuation: Vec::new() }
     }
 
     /// End the turn without applying anything, dropping the shadow and its work.

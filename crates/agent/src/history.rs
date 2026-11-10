@@ -26,12 +26,21 @@ pub struct Conversation {
     /// A summary of the turns compaction removed, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
+    /// Rig's continuation messages from the last finished turn, as it returned them.
+    ///
+    /// Stored as plain JSON rather than a Rig type so the transcript schema stays this crate's and
+    /// `figcraft-format` keeps treating the payload as opaque. A follow-up turn hands these back to
+    /// the agent with `.history(...)`, which is what lets the model see the tool calls and results
+    /// of the turn before it instead of only the text. An unreadable value is dropped, not fatal:
+    /// the conversation continues from the visible transcript.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub continuation: Vec<Value>,
 }
 
 impl Conversation {
     /// A new, empty conversation.
     pub fn new(id: impl Into<String>) -> Self {
-        Self { id: id.into(), turns: Vec::new(), summary: None }
+        Self { id: id.into(), turns: Vec::new(), summary: None, continuation: Vec::new() }
     }
 
     /// Append a turn.
@@ -237,4 +246,24 @@ pub fn context_for_model(conversation: &Conversation) -> Vec<Value> {
         }
     }
     out
+}
+
+/// Rig's continuation messages from stored JSON, dropping anything Rig would reject.
+///
+/// The transcript stores these as plain JSON so the schema stays this crate's and `figcraft-format`
+/// keeps treating the payload as opaque. On the way back they must be Rig's `Message` again, and a
+/// stored value that no longer parses (an older schema, a hand-edited file, a future field Rig does
+/// not know) must not fail the turn: the conversation continues from the visible transcript with an
+/// empty history rather than refusing to run.
+///
+/// Messages are validated one at a time so one bad entry does not discard the whole run.
+pub fn continuation_messages(stored: &[Value]) -> Vec<rig_core::completion::Message> {
+    stored.iter().filter_map(|v| serde_json::from_value(v.clone()).ok()).collect()
+}
+
+/// Whether a stored continuation is wholly readable, for a reader that wants to warn.
+///
+/// `continuation_messages` is deliberately lenient; this says whether anything had to be dropped.
+pub fn continuation_is_intact(stored: &[Value]) -> bool {
+    stored.iter().all(|v| serde_json::from_value::<rig_core::completion::Message>(v.clone()).is_ok())
 }

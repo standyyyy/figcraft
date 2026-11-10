@@ -392,6 +392,10 @@ a later step can use `{"$step": 0, "field": "ids/0"}` to target the first match.
 | `get_requirements {id? \| title?}` | One requirements document with its Markdown rendering. An exact `id` wins over a `title`. Runs `requirements.get`. |
 | `upsert_requirements {id?, title, summary?, goals?, nonGoals?, audiences?, requirements? [{id?, title, detail?, priority?, acceptanceCriteria?}], acceptanceCriteria?, openQuestions?}` | Create (no `id`) or replace (with `id`) a requirements document. `title` is required; caps apply to every field and an unknown priority is refused. Ids are allocated by the document (`PRD:n`), so replaying the same call produces the same id. Runs `requirements.upsert`. |
 | `export_requirements_markdown {id? \| title?, path?}` | The document as Markdown: the text comes back in the result, or is written to `path` through the engine's guarded file access. Runs `requirements.exportMarkdown`. |
+
+The canvas and requirements tools are defined once, in `figcraft-agent-tools`, and consumed by both
+this server and the in-app Agent. A tool behaves identically on either surface; the Agent is offered
+the document-local, replayable subset only (see [agent.md](agent.md)).
 | `wait_for_changes {after?, timeoutMs?, topics?, limit?}` | Wait for new comment events in the attached app; returns pending events at once, else waits up to `timeoutMs` (default 20 s, max 25 s). Pass the returned `cursor` back to keep watching. Headless returns immediately. |
 
 ### Compact layer trees

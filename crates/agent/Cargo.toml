@@ -1,0 +1,19 @@
+[package]
+name = "figcraft-agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "FigCraft embedded Agent: Rig runtime, shadow session, and one-undo commits"
+
+[lints]
+workspace = true
+
+[dependencies]
+figcraft-agent-tools = { workspace = true }
+figcraft-engine = { workspace = true }
+figcraft-doc = { workspace = true }
+rig-agent = { workspace = true }
+rig-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }

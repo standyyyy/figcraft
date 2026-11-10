@@ -33,6 +33,15 @@ figcraft-mcp = { path = "crates/mcp" }
 figcraft-collab-net = { path = "crates/collab-net" }
 figcraft-plugin = { path = "crates/plugin" }
 
+# The embedded Agent and the tool catalog both surfaces share. Rig is pinned exactly: 0.44.0 is
+# the last release that supports the workspace MSRV (1.95); 0.46 requires Rust 1.97.1. Only the
+# narrow `rig-core` reqwest transport is taken, never the `rig` facade, so the dependency graph
+# stays small and no second TLS backend joins the build.
+figcraft-agent-tools = { path = "crates/agent-tools" }
+figcraft-agent = { path = "crates/agent" }
+rig-agent = { version = "=0.44.0", default-features = true }
+rig-core = { version = "=0.44.0", default-features = false, features = ["reqwest"] }
+
 # Keep coupled craft-libs crates on one rev. craft-update has no sibling-crate
 # dependencies and is pinned separately for the suite updater rollout.
 # Which paths stored in a document may be followed (craft-libs).

@@ -2,7 +2,6 @@
 
 pub mod arrange;
 pub mod comment;
-pub mod requirements;
 pub mod component;
 pub mod create;
 pub mod edit;
@@ -16,6 +15,7 @@ pub mod page;
 pub mod props;
 pub mod proto;
 pub mod proto_actions;
+pub mod requirements;
 pub mod section;
 pub mod structure;
 pub mod styles;

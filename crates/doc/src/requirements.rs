@@ -200,11 +200,7 @@ impl RequirementsDocument {
             check("requirement title", &r.title, MAX_TITLE)?;
             check("requirement detail", &r.detail, MAX_DETAIL)?;
             if r.acceptance_criteria.len() > MAX_ITEMS {
-                return Err(RequirementsError::TooMany {
-                    field: "requirement acceptanceCriteria",
-                    len: r.acceptance_criteria.len(),
-                    max: MAX_ITEMS,
-                });
+                return Err(RequirementsError::TooMany { field: "requirement acceptanceCriteria", len: r.acceptance_criteria.len(), max: MAX_ITEMS });
             }
             for s in &r.acceptance_criteria {
                 check("requirement acceptance criterion", s, MAX_SHORT)?;

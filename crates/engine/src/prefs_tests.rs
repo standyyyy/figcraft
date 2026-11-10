@@ -1,8 +1,8 @@
 //! Preferences: the Agent provider settings are plain data, never serialized into a document, and
 //! never print a credential.
 
-use crate::prefs::*;
 use crate::Document;
+use crate::prefs::*;
 
 #[test]
 fn agent_preferences_default_to_off_with_no_endpoint() {

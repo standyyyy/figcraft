@@ -483,8 +483,6 @@ mod placed_image_size_tests;
 #[cfg(test)]
 mod playground_tests;
 #[cfg(test)]
-mod prefs_tests;
-#[cfg(test)]
 mod plugin_data_tests;
 #[cfg(test)]
 mod plugin_directory_tests;
@@ -492,6 +490,8 @@ mod plugin_directory_tests;
 mod plugin_panels_tests;
 #[cfg(test)]
 pub(crate) mod plugins_tests;
+#[cfg(test)]
+mod prefs_tests;
 #[cfg(test)]
 mod progressive_blur_tests;
 #[cfg(test)]

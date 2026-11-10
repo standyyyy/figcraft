@@ -13,9 +13,8 @@ fn plain() -> Document {
 }
 
 fn transcript(turns: usize) -> agent::AgentData {
-    let turns: Vec<serde_json::Value> = (0..turns)
-        .map(|i| json!({"turn": i, "request": format!("request {i}"), "answer": format!("answer {i}"), "outcome": "committed"}))
-        .collect();
+    let turns: Vec<serde_json::Value> =
+        (0..turns).map(|i| json!({"turn": i, "request": format!("request {i}"), "answer": format!("answer {i}"), "outcome": "committed"})).collect();
     agent::AgentData::new(json!({"version": 1, "conversations": [{"id": "c1", "turns": turns}]}))
 }
 
@@ -132,8 +131,7 @@ fn writing_an_oversized_transcript_is_refused() {
 
 #[test]
 fn too_many_conversations_are_refused() {
-    let conversations: Vec<serde_json::Value> =
-        (0..agent::MAX_CONVERSATIONS + 1).map(|i| json!({"id": format!("c{i}"), "turns": []})).collect();
+    let conversations: Vec<serde_json::Value> = (0..agent::MAX_CONVERSATIONS + 1).map(|i| json!({"id": format!("c{i}"), "turns": []})).collect();
     let data = agent::AgentData::new(json!({"version": 1, "conversations": conversations}));
     let e = agent::AgentData::from_bytes(&serde_json::to_vec(&data.json).unwrap()).expect_err("too many conversations");
     assert!(e.contains("limit"), "got {e}");

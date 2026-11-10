@@ -529,7 +529,13 @@ pub fn panel(ui: &mut Ui, state: &mut AgentPanel, input: &PanelInput) -> PanelOu
 
     // Header: the two tabs, so switching is one click.
     let (head, _) = ui.allocate_exact_size(vec2(width, 56.0), Sense::hover());
-    ui.painter().text(pos2(head.min.x + 16.0, head.min.y + 20.0), Align2::LEFT_CENTER, crate::i18n::tr("Agent"), crate::theme::semibold(13.0), t.text);
+    ui.painter().text(
+        pos2(head.min.x + 16.0, head.min.y + 20.0),
+        Align2::LEFT_CENTER,
+        crate::i18n::tr("Agent"),
+        crate::theme::semibold(13.0),
+        t.text,
+    );
     let mut x = head.min.x + 16.0;
     for (tab, label) in [(AgentTab::Chat, "Chat"), (AgentTab::Requirements, "Requirements")] {
         let w = if tab == AgentTab::Chat { 52.0 } else { 116.0 };
@@ -574,7 +580,13 @@ fn draw_chat(ui: &mut Ui, state: &mut AgentPanel, input: &PanelInput, t: &Tokens
         let r = Rect::from_min_size(pos2(transcript.min.x + 12.0, y), vec2(transcript.width() - 24.0, 46.0));
         let resp = ui.interact(r, Id::unique("agent-summary"), Sense::hover()).tip(crate::i18n::tr("Earlier turns were summarized"));
         ui.painter().rect_filled(r, CornerRadius::same(6), t.field);
-        ui.painter().text(pos2(r.min.x + 8.0, r.min.y + 10.0), Align2::LEFT_CENTER, crate::i18n::tr("Earlier turns summarized"), crate::theme::regular(10.0), t.text_tertiary);
+        ui.painter().text(
+            pos2(r.min.x + 8.0, r.min.y + 10.0),
+            Align2::LEFT_CENTER,
+            crate::i18n::tr("Earlier turns summarized"),
+            crate::theme::regular(10.0),
+            t.text_tertiary,
+        );
         let _ = resp;
         y += 54.0;
     }
@@ -612,7 +624,13 @@ fn draw_chat(ui: &mut Ui, state: &mut AgentPanel, input: &PanelInput, t: &Tokens
         let r = Rect::from_min_size(pos2(transcript.min.x + 12.0, y), vec2(transcript.width() - 24.0, 18.0));
         ui.painter().rect_filled(r, CornerRadius::same(4), t.field);
         let mark = if row.ok { "✓" } else { "…" };
-        ui.painter().text(pos2(r.min.x + 6.0, r.center().y), Align2::LEFT_CENTER, mark, crate::theme::regular(10.0), if row.ok { t.accent_text } else { t.text_tertiary });
+        ui.painter().text(
+            pos2(r.min.x + 6.0, r.center().y),
+            Align2::LEFT_CENTER,
+            mark,
+            crate::theme::regular(10.0),
+            if row.ok { t.accent_text } else { t.text_tertiary },
+        );
         ui.painter().text(pos2(r.min.x + 20.0, r.center().y), Align2::LEFT_CENTER, &row.name, crate::theme::regular(10.0), t.text_secondary);
         y += 22.0;
     }
@@ -622,13 +640,25 @@ fn draw_chat(ui: &mut Ui, state: &mut AgentPanel, input: &PanelInput, t: &Tokens
         if y + h <= transcript.max.y {
             let r = Rect::from_min_size(pos2(transcript.min.x + 12.0, y), vec2(transcript.width() - 24.0, h));
             ui.painter().rect_filled(r, CornerRadius::same(6), t.field);
-            ui.painter().text(pos2(r.min.x + 8.0, r.min.y + 10.0), Align2::LEFT_CENTER, widgets::elide_font(ui, error, r.width() - 16.0, crate::theme::regular(10.0)), crate::theme::regular(10.0), t.text);
+            ui.painter().text(
+                pos2(r.min.x + 8.0, r.min.y + 10.0),
+                Align2::LEFT_CENTER,
+                widgets::elide_font(ui, error, r.width() - 16.0, crate::theme::regular(10.0)),
+                crate::theme::regular(10.0),
+                t.text,
+            );
         }
     }
     // The last undo label, so the step can be found in the history.
     if let Some(label) = &state.last_undo_label {
         let ly = composer.min.y - 16.0;
-        ui.painter().text(pos2(transcript.min.x + 12.0, ly), Align2::LEFT_CENTER, widgets::elide_font(ui, label, transcript.width() - 24.0, crate::theme::regular(9.0)), crate::theme::regular(9.0), t.text_tertiary);
+        ui.painter().text(
+            pos2(transcript.min.x + 12.0, ly),
+            Align2::LEFT_CENTER,
+            widgets::elide_font(ui, label, transcript.width() - 24.0, crate::theme::regular(9.0)),
+            crate::theme::regular(9.0),
+            t.text_tertiary,
+        );
     }
 
     // Composer: a multiline field, then the send/stop/retry row.
@@ -636,10 +666,7 @@ fn draw_chat(ui: &mut Ui, state: &mut AgentPanel, input: &PanelInput, t: &Tokens
     ui.painter().line_segment([composer.min, pos2(composer.max.x, composer.min.y)], Stroke::new(1.0, t.border));
     let field = Rect::from_min_size(pos2(composer.min.x + 12.0, composer.min.y + 10.0), vec2(composer.width() - 24.0, 48.0));
     let mut text = state.draft.clone();
-    let edit = egui::TextEdit::multiline(&mut text)
-        .hint_text(crate::i18n::tr("Describe a change…"))
-        .desired_width(field.width())
-        .desired_rows(2);
+    let edit = egui::TextEdit::multiline(&mut text).hint_text(crate::i18n::tr("Describe a change…")).desired_width(field.width()).desired_rows(2);
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(field).layout(Layout::top_down(Align::LEFT)));
     let resp = child.add(edit);
     if resp.changed() {
@@ -651,9 +678,19 @@ fn draw_chat(ui: &mut Ui, state: &mut AgentPanel, input: &PanelInput, t: &Tokens
     let send_w = 64.0;
     let send = Rect::from_min_size(row.min, vec2(send_w, 22.0));
     let can_send = state.can_send() && input.configured;
-    let send_resp = ui.interact(send, Id::unique("agent-send"), Sense::click()).tip(if input.configured { crate::i18n::tr("Send") } else { crate::i18n::tr("Set the provider in Preferences") });
+    let send_resp = ui.interact(send, Id::unique("agent-send"), Sense::click()).tip(if input.configured {
+        crate::i18n::tr("Send")
+    } else {
+        crate::i18n::tr("Set the provider in Preferences")
+    });
     ui.painter().rect_filled(send, CornerRadius::same(5), if can_send { t.accent } else { t.field });
-    ui.painter().text(send.center(), Align2::CENTER_CENTER, crate::i18n::tr("Send"), crate::theme::semibold(11.0), if can_send { t.accent_on } else { t.text_tertiary });
+    ui.painter().text(
+        send.center(),
+        Align2::CENTER_CENTER,
+        crate::i18n::tr("Send"),
+        crate::theme::semibold(11.0),
+        if can_send { t.accent_on } else { t.text_tertiary },
+    );
     if send_resp.clicked() && can_send {
         out.push(Request::Send { request: state.draft.clone() });
     }
@@ -746,7 +783,13 @@ fn draw_requirements(ui: &mut Ui, state: &mut AgentPanel, input: &PanelInput, t:
         if resp.hovered() {
             ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
         }
-        ui.painter().text(pos2(r.min.x + 8.0, r.min.y + 10.0), Align2::LEFT_CENTER, widgets::elide_font(ui, &doc.title, r.width() - 16.0, crate::theme::semibold(11.0)), crate::theme::semibold(11.0), t.text);
+        ui.painter().text(
+            pos2(r.min.x + 8.0, r.min.y + 10.0),
+            Align2::LEFT_CENTER,
+            widgets::elide_font(ui, &doc.title, r.width() - 16.0, crate::theme::semibold(11.0)),
+            crate::theme::semibold(11.0),
+            t.text,
+        );
         let counts = format!("{} · {}", doc.requirements, doc.acceptance_criteria);
         ui.painter().text(pos2(r.min.x + 8.0, r.min.y + 26.0), Align2::LEFT_CENTER, counts, crate::theme::regular(9.0), t.text_tertiary);
         if resp.clicked() {
@@ -764,7 +807,13 @@ fn draw_requirements(ui: &mut Ui, state: &mut AgentPanel, input: &PanelInput, t:
         crate::i18n::tr("New requirements document")
     });
     ui.painter().rect_filled(new_r, CornerRadius::same(5), if full { t.field } else { t.accent });
-    ui.painter().text(new_r.center(), Align2::CENTER_CENTER, crate::i18n::tr("New document"), crate::theme::semibold(11.0), if full { t.text_tertiary } else { t.accent_on });
+    ui.painter().text(
+        new_r.center(),
+        Align2::CENTER_CENTER,
+        crate::i18n::tr("New document"),
+        crate::theme::semibold(11.0),
+        if full { t.text_tertiary } else { t.accent_on },
+    );
     if resp.clicked() && !full {
         state.requirements_draft = Some(RequirementsDraft::new());
     }
@@ -787,7 +836,13 @@ fn draw_requirements_editor(
         if *y + height + 16.0 > body.max.y - 44.0 {
             return;
         }
-        ui.painter().text(pos2(body.min.x + 12.0, *y + 6.0), Align2::LEFT_CENTER, crate::i18n::tr(label), crate::theme::regular(9.0), t.text_tertiary);
+        ui.painter().text(
+            pos2(body.min.x + 12.0, *y + 6.0),
+            Align2::LEFT_CENTER,
+            crate::i18n::tr(label),
+            crate::theme::regular(9.0),
+            t.text_tertiary,
+        );
         *y += 14.0;
         let r = Rect::from_min_size(pos2(body.min.x + 12.0, *y), vec2(field_w, height));
         ui.painter().rect_filled(r, CornerRadius::same(4), t.field);
@@ -809,7 +864,13 @@ fn draw_requirements_editor(
     let save = Rect::from_min_size(row.min, vec2(60.0, 22.0));
     let resp = ui.interact(save, Id::unique("req-save"), Sense::click()).tip(crate::i18n::tr("Save"));
     ui.painter().rect_filled(save, CornerRadius::same(5), if saveable { t.accent } else { t.field });
-    ui.painter().text(save.center(), Align2::CENTER_CENTER, crate::i18n::tr("Save"), crate::theme::semibold(11.0), if saveable { t.accent_on } else { t.text_tertiary });
+    ui.painter().text(
+        save.center(),
+        Align2::CENTER_CENTER,
+        crate::i18n::tr("Save"),
+        crate::theme::semibold(11.0),
+        if saveable { t.accent_on } else { t.text_tertiary },
+    );
     if resp.clicked() && saveable {
         out.push(Request::SaveRequirements { params: draft.to_params() });
     }
@@ -818,7 +879,13 @@ fn draw_requirements_editor(
     let can_export = draft.id.is_some();
     let resp = ui.interact(export, Id::unique("req-export"), Sense::click()).tip(crate::i18n::tr("Export as Markdown"));
     ui.painter().rect_filled(export, CornerRadius::same(5), t.field);
-    ui.painter().text(export.center(), Align2::CENTER_CENTER, crate::i18n::tr("Export"), crate::theme::semibold(11.0), if can_export { t.text } else { t.text_tertiary });
+    ui.painter().text(
+        export.center(),
+        Align2::CENTER_CENTER,
+        crate::i18n::tr("Export"),
+        crate::theme::semibold(11.0),
+        if can_export { t.text } else { t.text_tertiary },
+    );
     if let (true, Some(id)) = (resp.clicked() && can_export, draft.id.clone()) {
         out.push(Request::ExportRequirements { id });
     }
@@ -841,7 +908,13 @@ fn draw_requirements_editor(
         out.push(Request::CloseRequirements);
     }
     if let Some(note) = &state.export_note {
-        ui.painter().text(pos2(body.min.x + 12.0, body.max.y - 42.0), Align2::LEFT_CENTER, widgets::elide_font(ui, note, field_w, crate::theme::regular(9.0)), crate::theme::regular(9.0), t.text_tertiary);
+        ui.painter().text(
+            pos2(body.min.x + 12.0, body.max.y - 42.0),
+            Align2::LEFT_CENTER,
+            widgets::elide_font(ui, note, field_w, crate::theme::regular(9.0)),
+            crate::theme::regular(9.0),
+            t.text_tertiary,
+        );
     }
     let _ = input;
     let _ = Vec2::ZERO;
@@ -859,10 +932,7 @@ pub fn show(app: &mut crate::FigApp, ctx: &egui::Context) {
     let input = panel_input(app);
     let t = Tokens::get(ctx);
     let screen = ctx.content_rect();
-    let size = vec2(
-        AGENT_PANEL_WIDTH.max(AGENT_PANEL_MIN).min(screen.width() - 80.0),
-        (screen.height() - 160.0).clamp(320.0, 720.0),
-    );
+    let size = vec2(AGENT_PANEL_WIDTH.max(AGENT_PANEL_MIN).min(screen.width() - 80.0), (screen.height() - 160.0).clamp(320.0, 720.0));
     let mut open = true;
     let mut output = PanelOutput::default();
     egui::Window::new(crate::i18n::tr("Agent"))
@@ -900,12 +970,7 @@ fn panel_input(app: &mut crate::FigApp) -> PanelInput {
         Ok(v) => RequirementsList::from_result(&v),
         Err(_) => RequirementsList::default(),
     };
-    let conversation = app
-        .session
-        .ds()
-        .ok()
-        .map(|d| conversation_id(d.uid))
-        .unwrap_or_else(|| "doc-0".to_string());
+    let conversation = app.session.ds().ok().map(|d| conversation_id(d.uid)).unwrap_or_else(|| "doc-0".to_string());
     let chat = conversation_view(&app.ui.agent_transcript, &conversation);
     PanelInput { configured, requirements, chat }
 }
@@ -959,24 +1024,22 @@ pub fn perform_requests(app: &mut crate::FigApp) {
                     p.requirements_draft = None;
                 }
             }
-            Request::ExportRequirements { id } => {
-                match app.session.execute("requirements.exportMarkdown", &serde_json::json!({"id": id})) {
-                    Ok(v) => {
-                        let note = v.get("markdown").and_then(|m| m.as_str()).map(|md| {
-                            let first = md.lines().next().unwrap_or("").to_string();
-                            format!("{} ({} bytes)", first, md.len())
-                        });
-                        if let Some(p) = app.ui.agent.as_mut() {
-                            p.export_note = note;
-                        }
-                    }
-                    Err(e) => {
-                        if let Some(p) = app.ui.agent.as_mut() {
-                            p.error = Some(format!("{e}"));
-                        }
+            Request::ExportRequirements { id } => match app.session.execute("requirements.exportMarkdown", &serde_json::json!({"id": id})) {
+                Ok(v) => {
+                    let note = v.get("markdown").and_then(|m| m.as_str()).map(|md| {
+                        let first = md.lines().next().unwrap_or("").to_string();
+                        format!("{} ({} bytes)", first, md.len())
+                    });
+                    if let Some(p) = app.ui.agent.as_mut() {
+                        p.export_note = note;
                     }
                 }
-            }
+                Err(e) => {
+                    if let Some(p) = app.ui.agent.as_mut() {
+                        p.error = Some(format!("{e}"));
+                    }
+                }
+            },
             // Send and Retry are the host's: they start a turn, which Task 10's runtime performs.
             Request::Send { .. } | Request::Retry | Request::CloseRequirements => {}
         }

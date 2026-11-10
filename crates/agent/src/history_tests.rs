@@ -199,17 +199,10 @@ fn the_model_sees_the_summary_then_the_kept_turns() {
     // A removed turn's request appears only inside the summary, never as a turn of its own.
     let turn_contents: Vec<&str> = context
         .iter()
-        .filter(|m| {
-            m["content"]
-                .as_str()
-                .is_some_and(|c| !c.starts_with("Earlier in this conversation") && c != "Understood.")
-        })
+        .filter(|m| m["content"].as_str().is_some_and(|c| !c.starts_with("Earlier in this conversation") && c != "Understood."))
         .filter_map(|m| m["content"].as_str())
         .collect();
-    assert!(
-        !turn_contents.iter().any(|t| t.trim_end() == "request 0"),
-        "a removed request is only in the summary, not a turn: {turn_contents:?}"
-    );
+    assert!(!turn_contents.iter().any(|t| t.trim_end() == "request 0"), "a removed request is only in the summary, not a turn: {turn_contents:?}");
 }
 
 #[test]

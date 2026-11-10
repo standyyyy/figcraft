@@ -144,11 +144,10 @@ impl AgentHost for WorkerHost {
                     self.running = true;
                 } else {
                     // No worker: say so rather than leaving the panel streaming forever.
-                    push_event(&self.events, AgentEvent::Failed {
-                        turn,
-                        kind: AgentErrorKind::Configuration,
-                        message: "the Agent worker could not be started".into(),
-                    });
+                    push_event(
+                        &self.events,
+                        AgentEvent::Failed { turn, kind: AgentErrorKind::Configuration, message: "the Agent worker could not be started".into() },
+                    );
                 }
                 cancel
             }
@@ -249,17 +248,7 @@ fn run_turn(
     let credential = credential_for(config);
     let transport = figcraft_agent::transport::Transport::new(config.timeout_seconds());
     let mut emit = |event: AgentEvent| push_event(events, event);
-    let end = figcraft_agent::transport::run_turn(
-        config,
-        credential.as_deref(),
-        &transport,
-        &tools,
-        turn,
-        request,
-        limits,
-        cancel,
-        &mut emit,
-    );
+    let end = figcraft_agent::transport::run_turn(config, credential.as_deref(), &transport, &tools, turn, request, limits, cancel, &mut emit);
 
     match end {
         figcraft_agent::transport::TurnEnd::Cancelled => {
@@ -292,7 +281,8 @@ fn credential_for(config: &AgentConfig) -> Option<String> {
 fn shadow_from_snapshot(snapshot: &Snapshot) -> Result<figcraft_engine::Session, String> {
     // The snapshot is what `inspect_document` reported; a document round-trips through the same JSON
     // the format writes.
-    let doc: figcraft_doc::Document = serde_json::from_value(snapshot.document.clone()).map_err(|e| format!("the document snapshot could not be read: {e}"))?;
+    let doc: figcraft_doc::Document =
+        serde_json::from_value(snapshot.document.clone()).map_err(|e| format!("the document snapshot could not be read: {e}"))?;
     let session = figcraft_engine::Session::with_document(doc);
     let _ = snapshot.uid;
     Ok(session)
@@ -303,4 +293,3 @@ fn push_event(events: &Arc<Mutex<Vec<AgentEvent>>>, event: AgentEvent) {
         e.push(event);
     }
 }
-

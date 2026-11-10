@@ -30,10 +30,7 @@ fn document_index(s: &Session, p: &Value) -> Result<usize> {
         return Err(bad("requirements", format!("no requirements document `{id}`")));
     }
     let title = req_string("requirements", p, "title")?;
-    doc.requirements
-        .iter()
-        .position(|r| r.title == title)
-        .ok_or_else(|| bad("requirements", format!("no requirements document titled `{title}`")))
+    doc.requirements.iter().position(|r| r.title == title).ok_or_else(|| bad("requirements", format!("no requirements document titled `{title}`")))
 }
 
 fn list_of(p: &Value, key: &str) -> std::result::Result<Vec<String>, String> {
@@ -97,18 +94,12 @@ pub fn specs() -> Vec<CommandSpec> {
                 .collect();
             Ok(json!({"documents": documents, "max": MAX_DOCUMENTS}))
         }),
-        spec!(
-            "requirements.get",
-            "Read a requirements document",
-            "{id? (exact id, preferred) | title?}",
-            false,
-            |s, p| {
-                let i = document_index(s, p)?;
-                let doc = s.doc()?;
-                let r = doc.requirements.get(i).ok_or_else(|| bad("requirements.get", "no requirements document"))?;
-                Ok(json!({"document": r, "markdown": r.to_markdown()}))
-            }
-        ),
+        spec!("requirements.get", "Read a requirements document", "{id? (exact id, preferred) | title?}", false, |s, p| {
+            let i = document_index(s, p)?;
+            let doc = s.doc()?;
+            let r = doc.requirements.get(i).ok_or_else(|| bad("requirements.get", "no requirements document"))?;
+            Ok(json!({"document": r, "markdown": r.to_markdown()}))
+        }),
         spec!(
             "requirements.upsert",
             "Write a requirements document",

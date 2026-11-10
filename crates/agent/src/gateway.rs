@@ -72,9 +72,9 @@ impl ModelGateway {
     /// refusing that case would make the common local setup impossible.
     pub fn build(config: &AgentConfig, credentials: &dyn Credentials) -> Result<Self, ProviderError> {
         let key = match config.credential() {
-            Some(name) => credentials.resolve(name).ok_or_else(|| {
-                ProviderError::new(AgentErrorKind::Authentication, format!("no credential named `{name}` is set"))
-            })?,
+            Some(name) => credentials
+                .resolve(name)
+                .ok_or_else(|| ProviderError::new(AgentErrorKind::Authentication, format!("no credential named `{name}` is set")))?,
             // Rig needs some key to build a client; a local server ignores it.
             None => String::new(),
         };

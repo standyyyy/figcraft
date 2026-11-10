@@ -10,12 +10,7 @@ fn doc_with(id: &str, title: &str) -> (Document, RequirementsDocument) {
     let mut doc = Document::new("File");
     let mut prd = RequirementsDocument::new(id, title);
     prd.goals.push("A goal".into());
-    prd.requirements.push(Requirement {
-        id: "r-1".into(),
-        title: "Do the thing".into(),
-        priority: Priority::Must,
-        ..Requirement::default()
-    });
+    prd.requirements.push(Requirement { id: "r-1".into(), title: "Do the thing".into(), priority: Priority::Must, ..Requirement::default() });
     doc.requirements.push(prd.clone());
     (doc, prd)
 }
@@ -161,8 +156,5 @@ fn requirements_do_not_leak_into_an_unrelated_diff() {
         changes.iter().all(|c| !matches!(c, Change::Put { entry: Entry::Requirements(_), .. })),
         "renaming the file must not resend requirements: {changes:?}"
     );
-    assert!(
-        changes.iter().any(|c| matches!(c, Change::SetDoc { prop: DocProp::Name, .. })),
-        "only the name changed: {changes:?}"
-    );
+    assert!(changes.iter().any(|c| matches!(c, Change::SetDoc { prop: DocProp::Name, .. })), "only the name changed: {changes:?}");
 }

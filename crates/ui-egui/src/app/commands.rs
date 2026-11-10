@@ -135,9 +135,7 @@ impl FigApp {
                 "panel.agent" => match self.ui.agent.take() {
                     Some(_) => {}
                     None => {
-                        self.ui.agent = Some(agent::AgentPanel::new(agent::conversation_id(
-                            self.session.ds().map(|d| d.uid).unwrap_or(0),
-                        )));
+                        self.ui.agent = Some(agent::AgentPanel::new(agent::conversation_id(self.session.ds().map(|d| d.uid).unwrap_or(0))));
                     }
                 },
                 "palette.actions" => menus::toggle_palette(&mut self.ui),

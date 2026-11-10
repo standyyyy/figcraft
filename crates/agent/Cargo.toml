@@ -19,4 +19,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
 # The model transport: blocking HTTP, the same client the font store already ships.
+#
+# Native only. The browser has no sockets and uses fetch instead, and ureq's rustls feature would
+# pull ring and getrandom into the wasm build, which the wasm gate refuses (and which would be a
+# second TLS stack there). The transport module is compiled out on wasm for the same reason.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ureq = { workspace = true }

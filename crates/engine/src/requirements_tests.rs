@@ -139,9 +139,8 @@ fn an_invalid_document_is_refused_and_changes_nothing() {
     // A blank title is refused.
     assert!(s.execute("requirements.upsert", &json!({"title": "   "})).is_err());
     // An unknown priority is refused, naming the problem.
-    let err = s
-        .execute("requirements.upsert", &json!({"title": "T", "requirements": [{"title": "r", "priority": "banana"}]}))
-        .expect_err("bad priority");
+    let err =
+        s.execute("requirements.upsert", &json!({"title": "T", "requirements": [{"title": "r", "priority": "banana"}]})).expect_err("bad priority");
     assert!(format!("{err:?}").contains("priority") || format!("{err}").contains("priority"), "the error names the field: {err:?}");
 
     let list = s.execute("requirements.list", &json!({})).expect("list");
@@ -152,9 +151,7 @@ fn an_invalid_document_is_refused_and_changes_nothing() {
 fn overlong_text_is_refused() {
     let mut s = new_session();
     let long = "x".repeat(300);
-    let err = s
-        .execute("requirements.upsert", &json!({"title": long}))
-        .expect_err("overlong title");
+    let err = s.execute("requirements.upsert", &json!({"title": long})).expect_err("overlong title");
     assert!(format!("{err}").contains("limit"), "the error says what the limit is: {err}");
 }
 

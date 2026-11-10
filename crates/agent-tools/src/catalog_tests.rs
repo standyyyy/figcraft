@@ -221,10 +221,7 @@ fn upsert_requirements_declares_title_as_required() {
     // The schema tells a model `title` is needed; the command refuses without it (the engine's
     // `req_string`), so the two agree. This pins the declaration, which is what a model sees.
     let defs = tool_definitions(ToolPolicy::ExternalMcp);
-    let upsert = defs
-        .iter()
-        .find(|t| t.get("name").and_then(Value::as_str) == Some("upsert_requirements"))
-        .expect("upsert_requirements is defined");
+    let upsert = defs.iter().find(|t| t.get("name").and_then(Value::as_str) == Some("upsert_requirements")).expect("upsert_requirements is defined");
     assert_eq!(upsert.pointer("/inputSchema/required"), Some(&json!(["title"])), "title is required: {upsert}");
     // Every property it documents is reachable, and unknown ones are refused before dispatch.
     let mut b = Commands::new();

@@ -69,11 +69,7 @@ fn one_undo_removes_the_whole_write() {
     assert_eq!(c.ok("list_requirements", json!({}))["documents"].as_array().map(Vec::len), Some(1));
 
     c.ok("run_command", json!({"command": "edit.undo", "params": {}}));
-    assert_eq!(
-        c.ok("list_requirements", json!({}))["documents"].as_array().map(Vec::len),
-        Some(0),
-        "one undo removes the write"
-    );
+    assert_eq!(c.ok("list_requirements", json!({}))["documents"].as_array().map(Vec::len), Some(0), "one undo removes the write");
 
     c.ok("run_command", json!({"command": "edit.redo", "params": {}}));
     assert_eq!(c.ok("list_requirements", json!({}))["documents"].as_array().map(Vec::len), Some(1), "redo restores it");
@@ -115,11 +111,7 @@ fn an_invalid_requirements_write_is_refused_with_a_readable_error() {
     assert!(e.contains("priority"), "the error names the field: {e}");
     // Reading something that isn't there is an error, not a panic.
     c.err("get_requirements", json!({"id": "PRD:99"}));
-    assert_eq!(
-        c.ok("list_requirements", json!({}))["documents"].as_array().map(Vec::len),
-        Some(0),
-        "a refused write leaves the document unchanged"
-    );
+    assert_eq!(c.ok("list_requirements", json!({}))["documents"].as_array().map(Vec::len), Some(0), "a refused write leaves the document unchanged");
 }
 
 #[test]

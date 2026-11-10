@@ -34,10 +34,8 @@ impl std::fmt::Debug for Transport {
 impl Transport {
     /// Build a transport with `timeout_seconds` per request.
     pub fn new(timeout_seconds: u32) -> Self {
-        let agent: ureq::Agent = ureq::Agent::config_builder()
-            .timeout_global(Some(std::time::Duration::from_secs(u64::from(timeout_seconds))))
-            .build()
-            .into();
+        let agent: ureq::Agent =
+            ureq::Agent::config_builder().timeout_global(Some(std::time::Duration::from_secs(u64::from(timeout_seconds)))).build().into();
         Self { agent }
     }
 
@@ -62,18 +60,15 @@ impl Transport {
             Err(e) => {
                 let message = e.to_string();
                 // A timeout and a refused connection are different actions for the user.
-                let kind = if message.to_lowercase().contains("time") {
-                    AgentErrorKind::Timeout
-                } else {
-                    AgentErrorKind::Unreachable
-                };
+                let kind = if message.to_lowercase().contains("time") { AgentErrorKind::Timeout } else { AgentErrorKind::Unreachable };
                 return Err(TransportError::new(kind, format!("the provider could not be reached: {message}")));
             }
         };
         let mut response = response;
-        let text = response.body_mut().read_to_string().map_err(|e| {
-            TransportError::new(AgentErrorKind::Protocol, format!("the provider's reply could not be read: {e}"))
-        })?;
+        let text = response
+            .body_mut()
+            .read_to_string()
+            .map_err(|e| TransportError::new(AgentErrorKind::Protocol, format!("the provider's reply could not be read: {e}")))?;
         parse_message(&text)
     }
 }
@@ -142,15 +137,18 @@ impl Message {
 /// The model name is taken from the reply rather than assumed: a provider may answer under an alias,
 /// which the plan requires accepting without validation.
 pub fn parse_message(text: &str) -> Result<Message, TransportError> {
-    let v: Value = serde_json::from_str(text).map_err(|e| TransportError::new(AgentErrorKind::Protocol, format!("the provider's reply was not JSON: {e}")))?;
+    let v: Value =
+        serde_json::from_str(text).map_err(|e| TransportError::new(AgentErrorKind::Protocol, format!("the provider's reply was not JSON: {e}")))?;
     // An error object from a server that returned 200 with a problem.
     if let Some(err) = v.get("error") {
         let message = err.get("message").and_then(Value::as_str).unwrap_or("the provider reported an error");
         return Err(TransportError::new(AgentErrorKind::Protocol, summarize(message)));
     }
-    let choice = v.get("choices").and_then(Value::as_array).and_then(|c| c.first()).ok_or_else(|| {
-        TransportError::new(AgentErrorKind::Protocol, "the provider's reply had no choices")
-    })?;
+    let choice = v
+        .get("choices")
+        .and_then(Value::as_array)
+        .and_then(|c| c.first())
+        .ok_or_else(|| TransportError::new(AgentErrorKind::Protocol, "the provider's reply had no choices"))?;
     let msg = choice.get("message").ok_or_else(|| TransportError::new(AgentErrorKind::Protocol, "the provider's reply had no message"))?;
     let text_out = msg.get("content").and_then(Value::as_str).unwrap_or("").to_string();
     let mut tool_calls = Vec::new();

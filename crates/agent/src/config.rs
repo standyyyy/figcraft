@@ -100,13 +100,7 @@ impl AgentConfig {
         if !(AGENT_TIMEOUT_MIN..=AGENT_TIMEOUT_MAX).contains(&timeout_seconds) {
             return Err(ConfigError::TimeoutOutOfRange(timeout_seconds));
         }
-        Ok(Self {
-            base_url,
-            model: model.to_string(),
-            credential: prefs.credential.clone().filter(|c| !c.trim().is_empty()),
-            route,
-            timeout_seconds,
-        })
+        Ok(Self { base_url, model: model.to_string(), credential: prefs.credential.clone().filter(|c| !c.trim().is_empty()), route, timeout_seconds })
     }
 
     /// The normalized base URL: `http://host/v1`, no trailing slash, `/v1` exactly once.

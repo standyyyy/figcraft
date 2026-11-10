@@ -4,6 +4,8 @@
 //! commands; the canvas forwards pointer events to the engine's tools and draws overlays. Nothing
 //! below this crate knows about egui, so the frontend can be replaced.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+// Tests may unwrap: a failed expectation there is the point, not a crash in shipped code.
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 /// FigCraft as craft-update knows it, with its 128 px icon and accent colour: the update
 /// prompt shows both, and an AppImage's menu entry gets the icon.
@@ -17,6 +19,9 @@ pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
 pub mod a11y;
 pub mod agent;
 pub mod agent_host;
+/// The desktop Agent worker: one named thread per turn. Native only; the browser drives the same
+/// `AgentHost` interface with a local future instead.
+#[cfg(not(target_arch = "wasm32"))]
 pub mod agent_worker;
 pub mod bidi;
 pub mod canvas;
@@ -52,7 +57,7 @@ mod theme_startup_tests;
 
 #[cfg(test)]
 mod a11y_tests;
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod agent_host_tests;
 #[cfg(test)]
 mod agent_tests;

@@ -17,6 +17,3 @@ pub fn tool_definitions() -> Vec<serde_json::Value> {
 pub fn call_tool(b: &mut dyn figcraft_agent_tools::Backend, name: &str, args: &serde_json::Value) -> ToolResult {
     call_catalog_tool(b, ToolPolicy::ExternalMcp, name, args)
 }
-
-/// Make paint/effect JSON friendlier than the engine's strict serde. Re-exported for the CLI.
-pub use figcraft_agent_tools::catalog::normalize_props;

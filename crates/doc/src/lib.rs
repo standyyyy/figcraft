@@ -36,9 +36,9 @@ pub use figcraft_color as color;
 pub use figcraft_geom as geom;
 pub use handoff::*;
 pub use library::*;
-pub use requirements::*;
 pub use node::*;
 pub use props::*;
+pub use requirements::*;
 pub use styles::*;
 pub use text::*;
 pub use vector::*;
@@ -1342,8 +1342,6 @@ mod guides_tests;
 #[cfg(test)]
 mod handoff_tests;
 #[cfg(test)]
-mod requirements_tests;
-#[cfg(test)]
 mod ids_tests;
 #[cfg(test)]
 mod print_tests;
@@ -1355,6 +1353,8 @@ mod proto_expr_parse_tests;
 mod proto_expr_tests;
 #[cfg(test)]
 mod proto_overlay_anchor_tests;
+#[cfg(test)]
+mod requirements_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

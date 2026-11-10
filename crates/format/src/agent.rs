@@ -51,10 +51,7 @@ impl AgentData {
     pub fn to_bytes(&self) -> Result<Vec<u8>, FormatError> {
         let bytes = serde_json::to_vec(&self.json).map_err(|e| FormatError::Corrupt(format!("the transcript could not be written: {e}")))?;
         if bytes.len() > MAX_AGENT_BYTES {
-            return Err(FormatError::Corrupt(format!(
-                "the transcript is {} bytes, over the {MAX_AGENT_BYTES} limit",
-                bytes.len()
-            )));
+            return Err(FormatError::Corrupt(format!("the transcript is {} bytes, over the {MAX_AGENT_BYTES} limit", bytes.len())));
         }
         Ok(bytes)
     }

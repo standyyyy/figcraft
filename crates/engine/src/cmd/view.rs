@@ -508,6 +508,9 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("app.preferences", "Preferences", "{}", false, |s, _| ui(s, "dialog.preferences")),
         spec!("app.actions", "Actions", "{}", false, |s, _| ui(s, "palette.actions")),
         spec!("help.shortcuts", "Keyboard shortcuts", "{}", false, |s, _| ui(s, "panel.shortcuts")),
+        // The in-app Agent: it either opens or closes the panel, so a shortcut and the Actions
+        // palette reach it the same way as the rail icon.
+        spec!("app.agent", "Agent", "{}", false, |s, _| ui(s, "panel.agent")),
         spec!("help.about", "About FigCraft", "{}", false, |s, _| ui(s, "dialog.about")),
         spec!("help.page", "Help page", "{}", false, |s, _| ui(s, "open.help")),
         spec!(

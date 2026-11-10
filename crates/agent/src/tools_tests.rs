@@ -54,10 +54,7 @@ fn the_external_policy_advertises_the_full_catalog() {
 #[test]
 fn a_call_reaches_the_catalog_with_its_arguments_unchanged() {
     let tools = tools_for(ToolPolicy::EmbeddedAgent);
-    let r = tools.call(
-        "create_node",
-        &json!({"type": "rectangle", "x": 10.0, "y": 20.0, "width": 100.0, "height": 50.0, "name": "Card"}),
-    );
+    let r = tools.call("create_node", &json!({"type": "rectangle", "x": 10.0, "y": 20.0, "width": 100.0, "height": 50.0, "name": "Card"}));
     assert!(!r.is_error, "create_node failed: {}", r.first_text());
     assert_eq!(tools.replay_len(), 1, "the call ran as a command and was recorded");
 

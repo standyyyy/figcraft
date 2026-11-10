@@ -6,9 +6,7 @@ use figcraft_agent::run::{AgentEvent, AgentRun, Limits, Outcome};
 use figcraft_doc::{Priority, Requirement, RequirementsDocument};
 use serde_json::json;
 
-use crate::agent::{
-    AgentPanel, AgentTab, ChatView, Request, RequirementsDraft, RequirementsList, RunStatus, Running, conversation_view, status_of,
-};
+use crate::agent::{AgentPanel, AgentTab, ChatView, Request, RequirementsDraft, RequirementsList, RunStatus, Running, conversation_view, status_of};
 
 fn limits() -> Limits {
     Limits::default()
@@ -101,14 +99,7 @@ fn a_revision_conflict_is_its_own_status_with_a_rerun_offer() {
     let mut p = AgentPanel::new("doc-1");
     let l = limits();
     p.begin_turn(1, "x");
-    p.apply(
-        &AgentEvent::Failed {
-            turn: 1,
-            kind: AgentErrorKind::Conflict,
-            message: "the document changed while the Agent worked".into(),
-        },
-        &l,
-    );
+    p.apply(&AgentEvent::Failed { turn: 1, kind: AgentErrorKind::Conflict, message: "the document changed while the Agent worked".into() }, &l);
     assert_eq!(p.status, RunStatus::Conflict, "not a generic failure");
     let error = p.error.as_deref().expect("error text");
     assert!(error.contains("Run the request again"), "the action is to rerun: {error}");
@@ -201,8 +192,20 @@ fn a_draft_round_trips_through_the_command_parameters() {
         non_goals: vec!["New providers".into()],
         audiences: vec!["Phone buyers".into()],
         requirements: vec![
-            Requirement { id: "r-1".into(), title: "Remember the address".into(), detail: "Prefill.".into(), priority: Priority::Must, acceptance_criteria: vec![] },
-            Requirement { id: "r-2".into(), title: "Keep the cart".into(), detail: String::new(), priority: Priority::Should, acceptance_criteria: vec![] },
+            Requirement {
+                id: "r-1".into(),
+                title: "Remember the address".into(),
+                detail: "Prefill.".into(),
+                priority: Priority::Must,
+                acceptance_criteria: vec![],
+            },
+            Requirement {
+                id: "r-2".into(),
+                title: "Keep the cart".into(),
+                detail: String::new(),
+                priority: Priority::Should,
+                acceptance_criteria: vec![],
+            },
         ],
         acceptance_criteria: vec!["Under 30 s.".into()],
         open_questions: vec!["Gifts?".into()],

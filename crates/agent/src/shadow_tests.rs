@@ -16,11 +16,7 @@ fn live() -> Session {
 
 /// Create a rectangle through the shadow, as a model's `create_node` would.
 fn create_rect(sh: &mut Shadow, x: f64, y: f64, w: f64, h: f64) -> serde_json::Value {
-    let r = sh.call(
-        ToolPolicy::EmbeddedAgent,
-        "create_node",
-        &json!({"type": "rectangle", "x": x, "y": y, "width": w, "height": h, "name": "R"}),
-    );
+    let r = sh.call(ToolPolicy::EmbeddedAgent, "create_node", &json!({"type": "rectangle", "x": x, "y": y, "width": w, "height": h, "name": "R"}));
     assert!(!r.is_error, "create_node failed: {}", r.first_text());
     serde_json::from_str(r.first_text()).unwrap_or(json!(null))
 }
@@ -58,11 +54,7 @@ fn a_read_tool_observes_prior_shadow_edits() {
 fn read_only_tools_are_not_recorded() {
     let l = live();
     let mut sh = Shadow::capture(&l).expect("capture");
-    for (tool, args) in [
-        ("inspect_document", json!({"depth": 2})),
-        ("list_commands", json!({"filter": "node.set"})),
-        ("inspect_ui", json!({})),
-    ] {
+    for (tool, args) in [("inspect_document", json!({"depth": 2})), ("list_commands", json!({"filter": "node.set"})), ("inspect_ui", json!({}))] {
         let r = sh.call(ToolPolicy::EmbeddedAgent, tool, &args);
         assert!(!r.is_error, "{tool} failed: {}", r.first_text());
     }
@@ -118,11 +110,7 @@ fn a_model_batch_expands_into_its_steps() {
 fn a_nested_batch_is_refused() {
     let l = live();
     let mut sh = Shadow::capture(&l).expect("capture");
-    let r = sh.call(
-        ToolPolicy::EmbeddedAgent,
-        "batch",
-        &json!({"commands": [{"command": "command.batch", "params": {"commands": []}}]}),
-    );
+    let r = sh.call(ToolPolicy::EmbeddedAgent, "batch", &json!({"commands": [{"command": "command.batch", "params": {"commands": []}}]}));
     assert!(r.is_error);
 }
 
@@ -260,9 +248,5 @@ fn the_shadow_is_a_copy_not_a_reference() {
     let mut sh = Shadow::capture(&l).expect("capture");
     sh.call(ToolPolicy::EmbeddedAgent, "set_properties", &json!({"ids": [page], "props": {"name": "Renamed in shadow"}}));
     assert_eq!(l.doc().expect("doc").nodes().count(), live_count);
-    assert_ne!(
-        l.doc().expect("doc").node(page).map(|n| n.name.clone()),
-        Some("Renamed in shadow".to_string()),
-        "the live page kept its name"
-    );
+    assert_ne!(l.doc().expect("doc").node(page).map(|n| n.name.clone()), Some("Renamed in shadow".to_string()), "the live page kept its name");
 }

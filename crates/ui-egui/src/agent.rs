@@ -640,6 +640,16 @@ pub fn panel(ui: &mut Ui, state: &mut AgentPanel, input: &PanelInput) -> PanelOu
         crate::theme::semibold(13.0),
         t.text,
     );
+    // A new conversation, on the right of the header: it was reachable once and the rewrite left it
+    // without a control, which left the request type with a handler and no way to send it.
+    if state.tab == AgentTab::Chat {
+        let r = Rect::from_min_size(pos2(head.max.x - 96.0, head.min.y + 12.0), vec2(80.0, 20.0));
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(r).layout(Layout::left_to_right(Align::Center)));
+        let new = child.add(egui::Button::new(egui::RichText::new(crate::i18n::tr("New")).size(10.0)).min_size(vec2(80.0, 20.0)));
+        if new.on_hover_text(crate::i18n::tr("New conversation")).clicked() {
+            out.push(Request::NewConversation);
+        }
+    }
     let mut x = head.min.x + 16.0;
     for (tab, label) in [(AgentTab::Chat, "Chat"), (AgentTab::Requirements, "Requirements")] {
         let w = if tab == AgentTab::Chat { 52.0 } else { 116.0 };
@@ -676,273 +686,217 @@ fn draw_chat(ui: &mut Ui, state: &mut AgentPanel, input: &PanelInput, t: &Tokens
     let transcript = Rect::from_min_max(body.min, pos2(body.max.x, body.max.y - COMPOSER));
     let composer = Rect::from_min_max(pos2(body.min.x, transcript.max.y), body.max);
 
-    ui.painter().rect_filled(transcript, CornerRadius::ZERO, t.panel);
-    let mut y = transcript.min.y + 12.0;
+    // The transcript scrolls. It is the one part of this panel that grows without limit, and drawing it
+    // to fixed geometry meant a long conversation simply ran off the bottom with no way to reach it.
+    let mut area = ui.new_child(egui::UiBuilder::new().max_rect(transcript).layout(Layout::top_down(Align::Min)));
+    egui::ScrollArea::vertical().auto_shrink([false, false]).stick_to_bottom(true).show(&mut area, |ui| {
+        ui.add_space(10.0);
+        ui.spacing_mut().item_spacing.y = 6.0;
 
-    // The summary compaction wrote, so an elided history is visible rather than surprising.
-    if input.chat.summary.is_some() {
-        let r = Rect::from_min_size(pos2(transcript.min.x + 12.0, y), vec2(transcript.width() - 24.0, 46.0));
-        let resp = ui.interact(r, Id::unique("agent-summary"), Sense::hover()).tip(crate::i18n::tr("Earlier turns were summarized"));
-        ui.painter().rect_filled(r, CornerRadius::same(6), t.field);
-        ui.painter().text(
-            pos2(r.min.x + 8.0, r.min.y + 10.0),
-            Align2::LEFT_CENTER,
-            crate::i18n::tr("Earlier turns summarized"),
-            crate::theme::regular(10.0),
-            t.text_tertiary,
-        );
-        let _ = resp;
-        y += 54.0;
-    }
+        // The summary compaction wrote, so an elided history is visible rather than surprising.
+        if let Some(summary) = &input.chat.summary {
+            bubble(ui, t, crate::i18n::tr("Earlier turns summarized"), summary, Kind::Note);
+        }
 
-    if input.chat.is_empty() && state.current.is_none() {
-        // Empty state: what the panel is for, one line, no marketing copy.
-        ui.painter().text(
-            pos2(transcript.center().x, transcript.min.y + 60.0),
-            Align2::CENTER_CENTER,
-            if input.configured { crate::i18n::tr("Ask for a change to this file") } else { crate::i18n::tr("Set the provider in Preferences") },
-            crate::theme::regular(12.0),
-            t.text_tertiary,
-        );
-    }
+        if input.chat.is_empty() && state.current.is_none() {
+            ui.add_space(24.0);
+            ui.vertical_centered(|ui| {
+                let hint = if input.configured {
+                    crate::i18n::tr("Ask for a change to this file")
+                } else {
+                    crate::i18n::tr("Set the provider in Preferences")
+                };
+                ui.label(egui::RichText::new(hint).size(12.0).color(t.text_tertiary));
+            });
+        }
 
-    // Finished turns, newest last: each one a request and the answer it produced.
-    for run in &input.chat.runs {
-        y = draw_turn(ui, t, transcript, y, run, false);
-        if y > transcript.max.y {
-            break;
+        // Finished turns, oldest first.
+        for run in &input.chat.runs {
+            bubble(ui, t, &run.request, &run.request, Kind::Mine);
+            tools(ui, t, &run.tools, false);
+            if !run.answer.is_empty() {
+                bubble(ui, t, "", &run.answer, Kind::Answer);
+            }
+            if let Some(outcome) = run.outcome {
+                outcome_line(ui, t, outcome);
+            }
         }
-    }
 
-    // The turn in flight: its reasoning (collapsible), its answer as it streams, and its tools.
-    if let Some(run) = state.current.clone() {
-        let running = state.is_running();
-        // Reasoning first: it is what the model was doing before it had an answer, so it reads in the
-        // order it happened.
-        if !state.reasoning.is_empty() {
-            y = draw_reasoning(ui, state, t, transcript, y);
+        // The turn in flight.
+        if let Some(run) = state.current.clone() {
+            let running = state.is_running();
+            if !state.reasoning.is_empty() {
+                reasoning(ui, state, t);
+            }
+            if !run.answer.is_empty() {
+                bubble(ui, t, "", &run.answer, Kind::Answer);
+            }
+            tools(ui, t, &state.tools, running);
+        } else if !state.tools.is_empty() {
+            tools(ui, t, &state.tools, false);
         }
-        if !run.answer.is_empty() {
-            y = draw_message(ui, t, transcript, y, &run.answer, false);
-        }
-        y = draw_tools(ui, t, transcript, y, &state.tools, running);
-    } else if !state.tools.is_empty() {
-        // A finished turn whose record was settled: its tools are still worth showing.
-        y = draw_tools(ui, t, transcript, y, &state.tools, false);
-    }
-    // Notices: something was adjusted to let the turn continue (a shortened history, say).
-    for note in &state.notices {
-        if y + 16.0 > transcript.max.y {
-            break;
-        }
-        let text = widgets::elide_font(ui, note, transcript.width() - 40.0, crate::theme::regular(9.5));
-        ui.painter().text(pos2(transcript.min.x + 14.0, y + 7.0), Align2::LEFT_CENTER, text, crate::theme::regular(9.5), t.text_tertiary);
-        y += 16.0;
-    }
-    // The error, with the action the runtime classified.
-    if let Some(error) = &state.error {
-        let text = widgets::elide_font(ui, error, transcript.width() - 40.0, crate::theme::regular(10.0));
-        let w = transcript.width() - 24.0;
-        let h = 34.0;
-        if y + h <= transcript.max.y {
-            let r = Rect::from_min_size(pos2(transcript.min.x + 12.0, y), vec2(w, h));
-            // A tinted band rather than a grey box: an error should look like one.
-            ui.painter().rect_filled(r, CornerRadius::same(6), t.field);
-            ui.painter().rect_stroke(r, CornerRadius::same(6), Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
-            ui.painter().text(pos2(r.min.x + 9.0, r.center().y), Align2::LEFT_CENTER, text, crate::theme::regular(10.0), t.text);
-            let _ = h;
-        }
-    }
-    // The last undo label, so the step can be found in the history.
-    if let Some(label) = &state.last_undo_label {
-        let ly = composer.min.y - 16.0;
-        ui.painter().text(
-            pos2(transcript.min.x + 12.0, ly),
-            Align2::LEFT_CENTER,
-            widgets::elide_font(ui, label, transcript.width() - 24.0, crate::theme::regular(9.0)),
-            crate::theme::regular(9.0),
-            t.text_tertiary,
-        );
-    }
 
-    // Composer: a multiline field, then the send/stop/retry row.
-    ui.painter().rect_filled(composer, CornerRadius::ZERO, t.panel);
-    ui.painter().line_segment([composer.min, pos2(composer.max.x, composer.min.y)], Stroke::new(1.0, t.border));
-    let field = Rect::from_min_size(pos2(composer.min.x + 12.0, composer.min.y + 10.0), vec2(composer.width() - 24.0, 48.0));
+        for note in &state.notices {
+            ui.label(egui::RichText::new(note).size(9.5).color(t.text_tertiary));
+        }
+        if let Some(error) = &state.error {
+            egui::Frame::NONE.fill(t.field).corner_radius(CornerRadius::same(6)).inner_margin(egui::Margin::symmetric(9, 7)).show(ui, |ui| {
+                ui.label(egui::RichText::new(error).size(10.0).color(t.text));
+            });
+        }
+        ui.add_space(6.0);
+    });
+
+    // The composer, pinned below the scroll area so it never scrolls away.
+    draw_composer(ui, state, input, t, composer, out);
+}
+
+/// What a bubble is: who it belongs to, or that it is neither.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    /// The person's own words.
+    Mine,
+    /// The model's answer.
+    Answer,
+    /// Context the panel added: a summary, a notice.
+    Note,
+}
+
+/// One message, as native egui widgets so its text wraps, can be selected and copied, and takes the
+/// room it needs.
+///
+/// The panel used to paint every message with `painter().text()` at a height guessed from a character
+/// count. Long answers were elided mid-sentence and could not be selected, which is a poor way to read
+/// something a model wrote for you.
+fn bubble(ui: &mut Ui, t: &Tokens, title: &str, text: &str, kind: Kind) {
+    let (fill, stroke, align, text_colour, corner) = match kind {
+        Kind::Mine => (t.field, None, Align::Max, t.text, CornerRadius { nw: 8, ne: 8, sw: 8, se: 2 }),
+        Kind::Answer => (t.panel, Some(t.border), Align::Min, t.text, CornerRadius { nw: 8, ne: 8, sw: 2, se: 8 }),
+        Kind::Note => (t.field, None, Align::Min, t.text_tertiary, CornerRadius::same(6)),
+    };
+    let width = ui.available_width();
+    let max = if kind == Kind::Mine { width * 0.82 } else { width };
+    ui.with_layout(Layout::top_down(align), |ui| {
+        ui.set_max_width(max);
+        let mut frame = egui::Frame::NONE.fill(fill).corner_radius(corner).inner_margin(egui::Margin::symmetric(9, 7));
+        if let Some(stroke) = stroke {
+            frame = frame.stroke(Stroke::new(1.0, stroke));
+        }
+        frame.show(ui, |ui| {
+            ui.set_max_width(max - 18.0);
+            if !title.is_empty() && title != text {
+                ui.label(egui::RichText::new(title).size(11.0).color(text_colour));
+            }
+            // `Label` with wrapping is what makes a long answer readable and selectable.
+            ui.add(egui::Label::new(egui::RichText::new(text).size(11.0).color(text_colour)).wrap());
+        });
+    });
+}
+
+/// The tool calls of a turn, as quiet one-line strips.
+fn tools(ui: &mut Ui, t: &Tokens, rows: &[ToolCall], running: bool) {
+    if rows.is_empty() {
+        return;
+    }
+    ui.with_layout(Layout::top_down(Align::Min), |ui| {
+        ui.spacing_mut().item_spacing.y = 2.0;
+        for (i, row) in rows.iter().enumerate() {
+            let is_last = i + 1 == rows.len();
+            let mark = if !row.ok {
+                "·"
+            } else if running && is_last {
+                "◐"
+            } else {
+                "✓"
+            };
+            let colour = if row.ok { t.accent_text } else { t.text_tertiary };
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(mark).size(9.0).color(colour));
+                ui.label(egui::RichText::new(&row.name).size(9.0).color(t.text_secondary));
+            });
+        }
+    });
+    ui.add_space(2.0);
+}
+
+/// The model's reasoning, behind a disclosure.
+fn reasoning(ui: &mut Ui, state: &mut AgentPanel, t: &Tokens) {
+    let arrow = if state.show_reasoning { "▾" } else { "▸" };
+    let head = format!("{arrow}  {}", crate::i18n::tr("Thinking"));
+    let label = ui.add(egui::Label::new(egui::RichText::new(head).size(9.5).color(t.text_tertiary)).sense(Sense::click()));
+    if label.on_hover_text(crate::i18n::tr("Show how the model got there")).clicked() {
+        state.show_reasoning = !state.show_reasoning;
+    }
+    if !state.show_reasoning {
+        return;
+    }
+    // Bounded: a long deliberation is scrollable context, not the answer, so it is capped and the
+    // newest part is shown.
+    let shown: String = state.reasoning.chars().rev().take(6000).collect::<Vec<_>>().into_iter().rev().collect();
+    egui::Frame::NONE.fill(t.field).corner_radius(CornerRadius::same(6)).inner_margin(egui::Margin::symmetric(8, 6)).show(ui, |ui| {
+        egui::ScrollArea::vertical().max_height(220.0).auto_shrink([false, true]).id_salt("agent-reasoning-scroll").show(ui, |ui| {
+            ui.add(egui::Label::new(egui::RichText::new(shown).size(9.5).color(t.text_tertiary)).wrap());
+        });
+    });
+}
+
+/// What became of a turn, as one quiet line.
+fn outcome_line(ui: &mut Ui, t: &Tokens, outcome: Outcome) {
+    let (label, colour) = match outcome {
+        Outcome::Committed => (crate::i18n::tr("Applied · one undo step"), t.text_tertiary),
+        Outcome::Completed => (crate::i18n::tr("Answered · no changes"), t.text_tertiary),
+        Outcome::Conflict => (crate::i18n::tr("Not applied · the file changed"), t.accent),
+        Outcome::Failed => (crate::i18n::tr("Failed"), t.accent),
+        Outcome::Cancelled => (crate::i18n::tr("Stopped"), t.text_tertiary),
+        Outcome::Interrupted => (crate::i18n::tr("Interrupted"), t.text_tertiary),
+    };
+    ui.label(egui::RichText::new(label).size(9.0).color(colour));
+}
+
+/// The composer, pinned under the transcript.
+///
+/// Native widgets: a `TextEdit` that wraps, real buttons that show their own hover and disabled states,
+/// and Enter to send (Shift+Enter for a newline) -- what anyone expects of a chat box.
+fn draw_composer(ui: &mut Ui, state: &mut AgentPanel, input: &PanelInput, t: &Tokens, area: Rect, out: &mut PanelOutput) {
+    ui.painter().line_segment([area.min, pos2(area.max.x, area.min.y)], Stroke::new(1.0, t.border));
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(area.shrink2(vec2(12.0, 8.0))).layout(Layout::top_down(Align::Min)));
+    let ui = &mut child;
+    ui.spacing_mut().item_spacing.y = 6.0;
+
     let mut text = state.draft.clone();
-    let edit = egui::TextEdit::multiline(&mut text).hint_text(crate::i18n::tr("Describe a change…")).desired_width(field.width()).desired_rows(2);
-    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(field).layout(Layout::top_down(Align::LEFT)));
-    let resp = child.add(edit);
+    let edit = egui::TextEdit::multiline(&mut text).hint_text(crate::i18n::tr("Describe a change…")).desired_width(f32::INFINITY).desired_rows(2);
+    let resp = ui.add(edit);
     if resp.changed() {
         state.draft = text;
     }
     crate::a11y::text(&resp, crate::i18n::tr("Message to the Agent"), &state.draft);
 
-    let row = Rect::from_min_size(pos2(composer.min.x + 12.0, field.max.y + 6.0), vec2(composer.width() - 24.0, 24.0));
-    let send_w = 64.0;
-    let send = Rect::from_min_size(row.min, vec2(send_w, 22.0));
     let can_send = state.can_send() && input.configured;
-    let send_resp = ui.interact(send, Id::unique("agent-send"), Sense::click()).tip(if input.configured {
-        crate::i18n::tr("Send")
-    } else {
-        crate::i18n::tr("Set the provider in Preferences")
+    // Enter sends, Shift+Enter breaks the line: the keyboard habit every chat box has.
+    let submitted = resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.shift);
+
+    ui.horizontal(|ui| {
+        let send = ui.add_enabled(can_send, egui::Button::new(crate::i18n::tr("Send")).min_size(vec2(64.0, 22.0)));
+        let send = send.on_hover_text(if input.configured { crate::i18n::tr("Send") } else { crate::i18n::tr("Set the provider in Preferences") });
+        if (send.clicked() || submitted) && can_send {
+            out.push(Request::Send { request: state.draft.clone() });
+        }
+        if state.is_running() {
+            if ui.add(egui::Button::new(crate::i18n::tr("Stop")).min_size(vec2(64.0, 22.0))).clicked() {
+                out.push(Request::Cancel);
+            }
+        } else if input.chat.can_retry(state.status) {
+            let retry = ui.add(egui::Button::new(crate::i18n::tr("Retry")).min_size(vec2(64.0, 22.0)));
+            if retry.on_hover_text(crate::i18n::tr("Run it again")).clicked() {
+                out.push(Request::Retry);
+            }
+        }
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if let Some(label) = &state.last_undo_label {
+                ui.label(egui::RichText::new(label.as_str()).size(9.0).color(t.text_tertiary));
+            }
+        });
     });
-    ui.painter().rect_filled(send, CornerRadius::same(5), if can_send { t.accent } else { t.field });
-    ui.painter().text(
-        send.center(),
-        Align2::CENTER_CENTER,
-        crate::i18n::tr("Send"),
-        crate::theme::semibold(11.0),
-        if can_send { t.accent_on } else { t.text_tertiary },
-    );
-    if send_resp.clicked() && can_send {
-        out.push(Request::Send { request: state.draft.clone() });
-    }
-
-    // Stop while running; Retry after a failure, conflict or cancellation.
-    let second = Rect::from_min_size(pos2(send.max.x + 6.0, row.min.y), vec2(send_w, 22.0));
-    if state.is_running() {
-        let resp = ui.interact(second, Id::unique("agent-stop"), Sense::click()).tip(crate::i18n::tr("Stop"));
-        ui.painter().rect_filled(second, CornerRadius::same(5), t.field);
-        ui.painter().text(second.center(), Align2::CENTER_CENTER, crate::i18n::tr("Stop"), crate::theme::semibold(11.0), t.text);
-        if resp.clicked() {
-            out.push(Request::Cancel);
-        }
-    } else if input.chat.can_retry(state.status) {
-        let resp = ui.interact(second, Id::unique("agent-retry"), Sense::click()).tip(crate::i18n::tr("Run it again"));
-        ui.painter().rect_filled(second, CornerRadius::same(5), t.field);
-        ui.painter().text(second.center(), Align2::CENTER_CENTER, crate::i18n::tr("Retry"), crate::theme::semibold(11.0), t.text);
-        if resp.clicked() {
-            out.push(Request::Retry);
-        }
-    }
-    // New conversation, small and to the right.
-    let new_r = Rect::from_min_size(pos2(second.max.x + 6.0, row.min.y), vec2(52.0, 22.0));
-    let resp = ui.interact(new_r, Id::unique("agent-new"), Sense::click()).tip(crate::i18n::tr("New conversation"));
-    ui.painter().text(new_r.center(), Align2::CENTER_CENTER, crate::i18n::tr("New"), crate::theme::regular(10.0), t.text_secondary);
-    if resp.clicked() {
-        out.push(Request::NewConversation);
-    }
-}
-
-/// One message bubble: `mine` is the user's request, otherwise the model's answer.
-fn draw_message(ui: &mut Ui, t: &Tokens, area: Rect, y: f32, text: &str, mine: bool) -> f32 {
-    let pad = 8.0;
-    let w = (area.width() - 24.0).min(if mine { area.width() * 0.82 } else { area.width() - 24.0 });
-    // Rough height from the wrapped line count; the panel only draws, it does not measure precisely.
-    let font = crate::theme::regular(11.0);
-    let line_h = 15.0;
-    let shown = widgets::elide_font(ui, text, w - pad * 2.0, font.clone());
-    let lines = ((shown.chars().count() as f32 * 6.0) / (w - pad * 2.0)).ceil().max(1.0);
-    let h = lines * line_h + pad * 2.0;
-    if y + h > area.max.y {
-        return area.max.y + 1.0;
-    }
-    // The request sits on the right, where the person's own words belong; the answer on the left. The
-    // two alignments are what makes a conversation readable as one, and it costs one line of geometry.
-    let x = if mine { area.max.x - 12.0 - w } else { area.min.x + 12.0 };
-    let r = Rect::from_min_size(pos2(x, y), vec2(w, h));
-    if mine {
-        // The person's words: a tinted bubble, no border. It is theirs, not the tool's output.
-        ui.painter().rect_filled(r, CornerRadius { nw: 8, ne: 8, sw: 8, se: 2 }, t.field);
-        ui.painter().text(pos2(r.min.x + pad, r.min.y + pad), Align2::LEFT_TOP, &shown, font, t.text);
-    } else {
-        // The answer: on the surface, with a hairline border. No fill, so a long answer does not read
-        // as a wall of tint.
-        ui.painter().rect_filled(r, CornerRadius { nw: 8, ne: 8, sw: 2, se: 8 }, t.panel);
-        ui.painter().rect_stroke(r, CornerRadius { nw: 8, ne: 8, sw: 2, se: 8 }, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
-        ui.painter().text(pos2(r.min.x + pad, r.min.y + pad), Align2::LEFT_TOP, &shown, font, t.text);
-    }
-    y + h + 8.0
-}
-
-/// One finished turn: the request on the right, the answer on the left, and its tools between.
-fn draw_turn(ui: &mut Ui, t: &Tokens, area: Rect, y: f32, run: &AgentRun, running: bool) -> f32 {
-    let mut y = draw_message(ui, t, area, y, &run.request, true);
-    y = draw_tools(ui, t, area, y, &run.tools, running);
-    if !run.answer.is_empty() {
-        y = draw_message(ui, t, area, y, &run.answer, false);
-    }
-    // The outcome, as a quiet line: a turn that did not commit says so without shouting.
-    if let Some(outcome) = run.outcome {
-        let (label, colour) = match outcome {
-            Outcome::Committed => (crate::i18n::tr("Applied · one undo step"), t.text_tertiary),
-            Outcome::Completed => (crate::i18n::tr("Answered · no changes"), t.text_tertiary),
-            Outcome::Conflict => (crate::i18n::tr("Not applied · the file changed"), t.accent),
-            Outcome::Failed => (crate::i18n::tr("Failed"), t.accent),
-            Outcome::Cancelled => (crate::i18n::tr("Stopped"), t.text_tertiary),
-            Outcome::Interrupted => (crate::i18n::tr("Interrupted"), t.text_tertiary),
-        };
-        if y + 14.0 <= area.max.y {
-            ui.painter().text(pos2(area.min.x + 14.0, y + 6.0), Align2::LEFT_CENTER, label, crate::theme::regular(9.0), colour);
-            y += 16.0;
-        }
-    }
-    y + 4.0
-}
-
-/// The model's reasoning, streamed live, behind a disclosure.
-///
-/// Collapsed by default: it is the longest text on screen, and most of the time a person wants the
-/// result. Open, it is clearly not the answer -- small, muted, marked "Thinking" -- so it can be read
-/// without being mistaken for the reply.
-fn draw_reasoning(ui: &mut Ui, state: &mut AgentPanel, t: &Tokens, area: Rect, y: f32) -> f32 {
-    let head = Rect::from_min_size(pos2(area.min.x + 12.0, y), vec2(area.width() - 24.0, 18.0));
-    let arrow = if state.show_reasoning { "▾" } else { "▸" };
-    let label = format!("{arrow}  {}", crate::i18n::tr("Thinking"));
-    let resp = ui.interact(head, Id::unique("agent-reasoning"), Sense::click()).tip(crate::i18n::tr("Show how the model got there"));
-    ui.painter().text(pos2(head.min.x + 2.0, head.center().y), Align2::LEFT_CENTER, label, crate::theme::regular(9.5), t.text_tertiary);
-    if resp.clicked() {
-        state.show_reasoning = !state.show_reasoning;
-    }
-    let y = y + 20.0;
-    if !state.show_reasoning {
-        return y;
-    }
-    // Bounded so a long deliberation cannot push the answer off screen.
-    let room = ((area.max.y - y - 40.0) / 13.0).max(0.0) as usize;
-    let text: String = state.reasoning.chars().rev().take(room * 90).collect::<Vec<_>>().into_iter().rev().collect();
-    let font = crate::theme::regular(9.5);
-    let shown = widgets::elide_font(ui, &text, area.width() - 44.0, font.clone());
-    let lines = ((shown.chars().count() as f32 * 5.2) / (area.width() - 44.0)).ceil().max(1.0).min(room as f32);
-    let h = lines * 13.0 + 12.0;
-    if y + h > area.max.y - 8.0 {
-        return area.max.y;
-    }
-    let r = Rect::from_min_size(pos2(area.min.x + 12.0, y), vec2(area.width() - 24.0, h));
-    // A quiet well, not a bubble: it is context, not a message.
-    ui.painter().rect_filled(r, CornerRadius::same(6), t.field);
-    ui.painter().text(pos2(r.min.x + 8.0, r.min.y + 6.0), Align2::LEFT_TOP, shown, font, t.text_tertiary);
-    y + h + 8.0
-}
-
-/// A turn's tool calls, as one compact strip each.
-fn draw_tools(ui: &mut Ui, t: &Tokens, area: Rect, y: f32, tools: &[ToolCall], running: bool) -> f32 {
-    if tools.is_empty() {
-        return y;
-    }
-    let mut y = y;
-    for (i, row) in tools.iter().enumerate() {
-        if y + 16.0 > area.max.y {
-            break;
-        }
-        let is_last = i + 1 == tools.len();
-        let r = Rect::from_min_size(pos2(area.min.x + 12.0, y), vec2(area.width() - 24.0, 16.0));
-        // The tool strip is quieter than a message: it happened, it is not something to read.
-        ui.painter().rect_filled(r, CornerRadius::same(4), t.field);
-        let mark = if !row.ok {
-            "·"
-        } else if running && is_last {
-            "◐"
-        } else {
-            "✓"
-        };
-        let colour = if row.ok { t.accent_text } else { t.text_tertiary };
-        ui.painter().text(pos2(r.min.x + 6.0, r.center().y), Align2::LEFT_CENTER, mark, crate::theme::regular(9.0), colour);
-        ui.painter().text(pos2(r.min.x + 18.0, r.center().y), Align2::LEFT_CENTER, &row.name, crate::theme::regular(9.0), t.text_secondary);
-        y += 18.0;
-    }
-    y + 2.0
 }
 
 /// The Requirements tab: the list, or one document's fields.

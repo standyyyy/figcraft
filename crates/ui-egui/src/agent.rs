@@ -1186,14 +1186,24 @@ pub fn apply_connection_result(app: &mut crate::FigApp, request: u64, status: fi
 /// Settle the turn a terminal belongs to: apply its envelope, then record and persist the outcome.
 fn settle_turn(app: &mut crate::FigApp, terminal: &figcraft_agent::TurnTerminal) {
     app.ui.agent_running.finish();
-    apply_terminal(app, terminal);
-    // The turn is over: record how it ended in the file's conversation and persist it. Only a
-    // success can have committed anything, and `apply_terminal` has done that already.
-    if let Some(panel) = app.ui.agent.as_ref() {
-        record_turn(&mut app.ui.agent_transcript, panel, terminal);
+    // What actually happened to the document, which is the fact the transcript records.
+    let disposition = apply_terminal(app, terminal);
+    // Copied out first: recording needs the session (for the conversation id) and the transcript,
+    // which cannot be borrowed while the panel is.
+    let recorded = app
+        .ui
+        .agent
+        .as_ref()
+        .and_then(|panel| panel.current.as_ref().map(|run| (run.turn, run.request.clone(), run.answer.clone(), run.tools.clone())));
+    if let Some((turn, request, answer, tools)) = recorded {
+        record_turn(app, turn, request, answer, tools, &disposition);
     }
-    // A success carries Rig's transcript of the run: keep it for the next turn's history.
-    if let figcraft_agent::TurnTerminal::Success { continuation, .. } = terminal
+    // Rig's transcript becomes the next turn's history only when the turn's result was kept: a
+    // rejected run's messages describe edits that did not land, and replaying them would have the
+    // model believe its changes are in the document.
+    let kept = matches!(disposition, ApplyDisposition::Completed | ApplyDisposition::Committed);
+    if kept
+        && let figcraft_agent::TurnTerminal::Success { continuation, .. } = terminal
         && !continuation.is_empty()
         && let Some(convo) = app.ui.agent_transcript.conversations.last_mut()
     {
@@ -1208,31 +1218,69 @@ fn settle_turn(app: &mut crate::FigApp, terminal: &figcraft_agent::TurnTerminal)
 /// one the panel is showing (a late result from an older turn must not land), and the document uid and
 /// revision must still be the ones the turn was built from. Checking at the snapshot instead would
 /// leave a window for the document to change between the check and the write.
-fn apply_terminal(app: &mut crate::FigApp, terminal: &figcraft_agent::TurnTerminal) {
+/// What applying a terminal actually did to the live document.
+///
+/// This is the fact the transcript records. The model's answer is not the same question: a turn can
+/// answer successfully and change nothing, and a turn can answer successfully while its edits are
+/// refused because the document moved on. Recording "committed" for either would claim an undo entry
+/// that does not exist and tell the next turn that rejected edits landed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ApplyDisposition {
+    /// The model answered and changed nothing.
+    Completed,
+    /// The model answered and its replay became one undo entry.
+    Committed,
+    /// The model answered but nothing was applied, and this is why.
+    Conflict(String),
+    /// It failed; nothing was applied.
+    Failed,
+    /// It was cancelled; nothing was applied.
+    Cancelled,
+}
+
+impl ApplyDisposition {
+    /// The transcript outcome this disposition means.
+    pub fn outcome(&self) -> figcraft_agent::run::Outcome {
+        match self {
+            ApplyDisposition::Completed => figcraft_agent::run::Outcome::Completed,
+            ApplyDisposition::Committed => figcraft_agent::run::Outcome::Committed,
+            ApplyDisposition::Conflict(_) => figcraft_agent::run::Outcome::Conflict,
+            ApplyDisposition::Failed => figcraft_agent::run::Outcome::Failed,
+            ApplyDisposition::Cancelled => figcraft_agent::run::Outcome::Cancelled,
+        }
+    }
+}
+
+fn apply_terminal(app: &mut crate::FigApp, terminal: &figcraft_agent::TurnTerminal) -> ApplyDisposition {
     match terminal {
         figcraft_agent::TurnTerminal::Success { commit: Some(envelope), .. } => commit_turn(app, envelope),
         figcraft_agent::TurnTerminal::Success { commit: None, .. } => {
-            // A read-only turn: it succeeded and changed nothing.
+            // A read-only turn: it succeeded and changed nothing. `Completed`, not `Committed`:
+            // claiming an undo entry that does not exist is a claim the transcript would repeat.
             if let Some(panel) = app.ui.agent.as_mut() {
                 panel.status = RunStatus::Done;
             }
+            ApplyDisposition::Completed
         }
         figcraft_agent::TurnTerminal::LimitReached { message, .. } => {
             if let Some(panel) = app.ui.agent.as_mut() {
                 panel.status = RunStatus::Failed;
                 panel.error = Some(message.clone());
             }
+            ApplyDisposition::Failed
         }
         figcraft_agent::TurnTerminal::Failed { message, .. } => {
             if let Some(panel) = app.ui.agent.as_mut() {
                 panel.status = RunStatus::Failed;
                 panel.error = Some(message.clone());
             }
+            ApplyDisposition::Failed
         }
         figcraft_agent::TurnTerminal::Cancelled { .. } => {
             if let Some(panel) = app.ui.agent.as_mut() {
                 panel.status = RunStatus::Cancelled;
             }
+            ApplyDisposition::Cancelled
         }
     }
 }
@@ -1242,24 +1290,31 @@ fn apply_terminal(app: &mut crate::FigApp, terminal: &figcraft_agent::TurnTermin
 /// Three checks, all at the write: the turn is the one the panel shows (a late reply from a previous
 /// turn would otherwise apply into a newer one), the file is the one the Agent inspected, and the
 /// revision is exactly the one it was built from. Any mismatch applies nothing and says why.
-fn commit_turn(app: &mut crate::FigApp, envelope: &figcraft_agent::CommitEnvelope) {
+fn commit_turn(app: &mut crate::FigApp, envelope: &figcraft_agent::CommitEnvelope) -> ApplyDisposition {
     if envelope.is_empty() {
-        return;
+        // A success with an empty envelope is a read-only turn that reported one anyway.
+        if let Some(panel) = app.ui.agent.as_mut() {
+            panel.status = RunStatus::Done;
+        }
+        return ApplyDisposition::Completed;
     }
     // The panel's current turn: a stale success must not land in a newer turn.
     let shown = app.ui.agent.as_ref().and_then(|p| p.current.as_ref()).map(|r| r.turn);
     if shown != Some(envelope.turn) {
-        set_conflict(app, "the Agent finished an older request, so its changes were not applied. Run the request again.");
-        return;
+        let why = "the Agent finished an older request, so its changes were not applied. Run the request again.";
+        set_conflict(app, why);
+        return ApplyDisposition::Conflict(why.to_string());
     }
     let Ok(ds) = app.session.ds() else {
-        set_conflict(app, "the file the Agent worked in is no longer open, so its changes were not applied.");
-        return;
+        let why = "the file the Agent worked in is no longer open, so its changes were not applied.";
+        set_conflict(app, why);
+        return ApplyDisposition::Conflict(why.to_string());
     };
     let (uid, revision) = (ds.uid, ds.revision);
     if let Some(reason) = envelope.refusal(uid, revision) {
-        set_conflict(app, &format!("{reason}, so its changes were not applied. Run the request again."));
-        return;
+        let why = format!("{reason}, so its changes were not applied. Run the request again.");
+        set_conflict(app, &why);
+        return ApplyDisposition::Conflict(why);
     }
     let batch = serde_json::json!({ "label": envelope.undo_label, "commands": envelope.batch_commands() });
     match app.session.execute("command.batch", &batch) {
@@ -1268,9 +1323,14 @@ fn commit_turn(app: &mut crate::FigApp, envelope: &figcraft_agent::CommitEnvelop
                 panel.last_undo_label = Some(envelope.undo_label.clone());
                 panel.status = RunStatus::Done;
             }
+            ApplyDisposition::Committed
         }
-        // The batch rolls itself back, so nothing landed.
-        Err(e) => set_conflict(app, &format!("the Agent's changes could not be applied together: {e}")),
+        // The batch rolls itself back, so nothing landed: this is a conflict, not a commit.
+        Err(e) => {
+            let why = format!("the Agent's changes could not be applied together: {e}");
+            set_conflict(app, &why);
+            ApplyDisposition::Conflict(why)
+        }
     }
 }
 
@@ -1453,21 +1513,26 @@ pub(crate) fn begin_transcript_turn(transcript: &mut figcraft_agent::history::Tr
 ///
 /// The outcome is the typed terminal, so a failed, cancelled or limited turn is recorded as such and
 /// never as committed -- the transcript and the document agree about what happened.
-fn record_turn(transcript: &mut figcraft_agent::history::Transcript, panel: &AgentPanel, terminal: &figcraft_agent::TurnTerminal) {
-    let Some(current) = panel.current.as_ref() else { return };
-    let outcome = match terminal {
-        figcraft_agent::TurnTerminal::Success { .. } => figcraft_agent::run::Outcome::Committed,
-        figcraft_agent::TurnTerminal::Failed { .. } | figcraft_agent::TurnTerminal::LimitReached { .. } => figcraft_agent::run::Outcome::Failed,
-        figcraft_agent::TurnTerminal::Cancelled { .. } => figcraft_agent::run::Outcome::Cancelled,
-    };
-    for convo in transcript.conversations.iter_mut() {
-        if let Some(run) = convo.turns.iter_mut().find(|r| r.turn == current.turn) {
-            run.request = current.request.clone();
-            run.answer = current.answer.clone();
-            run.tools = current.tools.clone();
-            run.outcome = Some(outcome);
-            return;
-        }
+fn record_turn(
+    app: &mut crate::FigApp,
+    turn: u64,
+    request: String,
+    answer: String,
+    tools: Vec<figcraft_agent::run::ToolCall>,
+    disposition: &ApplyDisposition,
+) {
+    // The outcome comes from what was applied, not from whether the model answered: a successful
+    // answer whose batch was refused is a conflict, and a read-only answer is completed.
+    let outcome = disposition.outcome();
+    // The conversation the panel is showing, not every conversation with a matching turn number: turn
+    // numbers are per conversation, so a search across all of them can write into the wrong one.
+    let conversation = conversation_id_of(app);
+    let Some(convo) = app.ui.agent_transcript.conversations.iter_mut().find(|c| c.id == conversation) else { return };
+    if let Some(run) = convo.turns.iter_mut().find(|r| r.turn == turn) {
+        run.request = request;
+        run.answer = answer;
+        run.tools = tools;
+        run.outcome = Some(outcome);
     }
 }
 

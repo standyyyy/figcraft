@@ -1020,3 +1020,138 @@ fn a_result_from_an_older_test_is_discarded() {
     crate::agent::apply_connection_result(&mut app, 7, figcraft_agent::runtime::ConnectionStatus::Ready);
     assert_eq!(app.ui.agent_connection, crate::agent::AgentConnectionState::Ready);
 }
+
+// ---------- the transcript records the live commit, not the model's answer ----------
+
+/// The transcript outcome recorded for `turn` in the file's conversation.
+fn recorded_outcome(app: &crate::FigApp, turn: u64) -> Option<figcraft_agent::run::Outcome> {
+    app.ui.agent_transcript.conversations.iter().flat_map(|c| c.turns.iter()).find(|r| r.turn == turn).and_then(|r| r.outcome)
+}
+
+#[test]
+fn a_replay_that_applies_is_recorded_as_committed() {
+    // The model answered *and* the batch landed: only then is the turn committed.
+    let mut app = harness_with(true);
+    let (uid, revision) = current(&app);
+    app.ui.agent_host = Some(Box::new(TerminalHost(None)));
+    app.ui.agent_requests.push(Request::Send { request: "draw".into() });
+    crate::agent::perform_requests(&mut app);
+    let turn = app.ui.agent_turn;
+
+    let step = figcraft_agent::shadow::ReplayStep {
+        command: "node.create".into(),
+        params: serde_json::json!({"type": "rectangle", "width": 10.0, "height": 10.0}),
+    };
+    let envelope = figcraft_agent::CommitEnvelope::new(turn, uid, revision, vec![step], "AI: draw");
+    app.ui.agent_host = Some(Box::new(TerminalHost(Some(figcraft_agent::TurnTerminal::Success {
+        turn,
+        answer: "done".into(),
+        commit: Some(envelope),
+        continuation: Vec::new(),
+    }))));
+    crate::agent::poll_host(&mut app);
+
+    assert_eq!(recorded_outcome(&app, turn), Some(figcraft_agent::run::Outcome::Committed), "the batch landed");
+    assert_eq!(app.session.undo_depth().0, 1, "and it is one undo entry");
+}
+
+#[test]
+fn a_read_only_success_is_recorded_as_completed_not_committed() {
+    // The model answered and changed nothing. Calling that "committed" claims an undo entry that does
+    // not exist, and the transcript would repeat the claim.
+    let mut app = harness_with(true);
+    app.ui.agent_host = Some(Box::new(TerminalHost(None)));
+    app.ui.agent_requests.push(Request::Send { request: "what is here?".into() });
+    crate::agent::perform_requests(&mut app);
+    let turn = app.ui.agent_turn;
+
+    app.ui.agent_host = Some(Box::new(TerminalHost(Some(figcraft_agent::TurnTerminal::Success {
+        turn,
+        answer: "an empty page".into(),
+        commit: None,
+        continuation: Vec::new(),
+    }))));
+    crate::agent::poll_host(&mut app);
+
+    assert_eq!(recorded_outcome(&app, turn), Some(figcraft_agent::run::Outcome::Completed));
+    assert_eq!(app.session.undo_depth().0, 0, "nothing was applied");
+}
+
+#[test]
+fn a_stale_revision_is_recorded_as_conflict_and_keeps_the_last_good_continuation() {
+    // The model answered but the document moved on, so nothing was applied. The transcript must say so,
+    // and the continuation must not advance: the next turn would otherwise assume edits landed that
+    // were rejected.
+    let mut app = harness_with(true);
+    let (uid, revision) = current(&app);
+    app.ui.agent_host = Some(Box::new(TerminalHost(None)));
+    app.ui.agent_requests.push(Request::Send { request: "draw".into() });
+    crate::agent::perform_requests(&mut app);
+    let turn = app.ui.agent_turn;
+
+    let step = figcraft_agent::shadow::ReplayStep { command: "node.create".into(), params: serde_json::json!({"type": "star"}) };
+    // Built against a revision the document no longer has.
+    let envelope = figcraft_agent::CommitEnvelope::new(turn, uid, revision + 5, vec![step], "AI: draw");
+    let continuation = vec![serde_json::json!({"role": "user", "content": [{"type": "text", "text": "the rejected run"}]})];
+    app.ui.agent_host = Some(Box::new(TerminalHost(Some(figcraft_agent::TurnTerminal::Success {
+        turn,
+        answer: "done".into(),
+        commit: Some(envelope),
+        continuation: continuation.clone(),
+    }))));
+    let before = app.session.doc().expect("doc").nodes().count();
+    crate::agent::poll_host(&mut app);
+
+    assert_eq!(recorded_outcome(&app, turn), Some(figcraft_agent::run::Outcome::Conflict), "the transcript says the edits were not applied");
+    assert_eq!(app.session.doc().expect("doc").nodes().count(), before, "and nothing was applied");
+    let kept = app.ui.agent_transcript.conversations.iter().find_map(|c| c.continuation.first()).cloned();
+    assert!(kept.is_none(), "a rejected run does not become the next turn's history: {kept:?}");
+}
+
+#[test]
+fn a_batch_that_cannot_apply_is_recorded_as_conflict() {
+    // The envelope was accepted but `command.batch` refused it and rolled back. Nothing landed, so the
+    // transcript must not claim a commit.
+    let mut app = harness_with(true);
+    let (uid, revision) = current(&app);
+    app.ui.agent_host = Some(Box::new(TerminalHost(None)));
+    app.ui.agent_requests.push(Request::Send { request: "draw".into() });
+    crate::agent::perform_requests(&mut app);
+    let turn = app.ui.agent_turn;
+
+    // A command that does not exist: the batch refuses the whole thing.
+    let step = figcraft_agent::shadow::ReplayStep { command: "node.thisCommandDoesNotExist".into(), params: serde_json::json!({}) };
+    let envelope = figcraft_agent::CommitEnvelope::new(turn, uid, revision, vec![step], "AI: broken");
+    app.ui.agent_host = Some(Box::new(TerminalHost(Some(figcraft_agent::TurnTerminal::Success {
+        turn,
+        answer: "done".into(),
+        commit: Some(envelope),
+        continuation: Vec::new(),
+    }))));
+    let before = app.session.doc().expect("doc").nodes().count();
+    crate::agent::poll_host(&mut app);
+
+    assert_eq!(recorded_outcome(&app, turn), Some(figcraft_agent::run::Outcome::Conflict));
+    assert_eq!(app.session.doc().expect("doc").nodes().count(), before, "the batch rolled back");
+    assert_eq!(app.session.undo_depth().0, 0, "and left no undo entry");
+}
+
+#[test]
+fn a_stale_terminal_changes_no_transcript_record_for_the_current_turn() {
+    // A late result from an older turn must not write anything about the newer one.
+    let mut app = harness_with(true);
+    app.ui.agent_host = Some(Box::new(TerminalHost(None)));
+    app.ui.agent_requests.push(Request::Send { request: "the newer request".into() });
+    crate::agent::perform_requests(&mut app);
+    let newer = app.ui.agent_turn;
+
+    // A terminal for an older turn arrives.
+    app.ui.agent_host = Some(Box::new(TerminalHost(Some(figcraft_agent::TurnTerminal::Failed {
+        turn: newer.saturating_sub(3),
+        kind: figcraft_agent::AgentErrorKind::Unreachable,
+        message: "the old turn".into(),
+    }))));
+    crate::agent::poll_host(&mut app);
+
+    assert_eq!(recorded_outcome(&app, newer), None, "the newer turn is untouched");
+}

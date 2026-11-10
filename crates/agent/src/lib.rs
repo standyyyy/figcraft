@@ -11,6 +11,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod config;
+pub mod run;
 pub mod gateway;
 pub mod shadow;
 pub mod tools;
@@ -24,10 +25,15 @@ mod gateway_tests;
 mod shadow_tests;
 
 #[cfg(test)]
+#[path = "run_tests.rs"]
+mod run_tests;
+
+#[cfg(test)]
 #[path = "tools_tests.rs"]
 mod tools_tests;
 
 pub use config::{AgentConfig, ConfigError, Route};
+pub use run::{AgentEvent, AgentRun, CancelToken, Limits, Outcome, RetryPolicy, ToolCall};
 pub use gateway::{Credentials, Environment, ModelGateway, ProviderError};
 
 /// What went wrong, classified once at the Agent boundary.

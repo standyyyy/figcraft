@@ -103,7 +103,11 @@ impl std::error::Error for TransportError {}
 /// One assistant message: text, tool calls, or both.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Message {
-    /// The text the model wrote.
+    /// The text the model wrote, which is what a person reads.
+    ///
+    /// A provider's `reasoning` / `thinking` field is deliberately **dropped**: the plan requires the
+    /// panel to show tool activity and errors but not hidden reasoning, and a model's scratchpad is
+    /// not an answer.
     pub text: String,
     /// The tools it asked for, in order.
     pub tool_calls: Vec<ToolCall>,
@@ -150,6 +154,10 @@ pub fn parse_message(text: &str) -> Result<Message, TransportError> {
         .and_then(|c| c.first())
         .ok_or_else(|| TransportError::new(AgentErrorKind::Protocol, "the provider's reply had no choices"))?;
     let msg = choice.get("message").ok_or_else(|| TransportError::new(AgentErrorKind::Protocol, "the provider's reply had no message"))?;
+    // `content` only. A DeepSeek-shaped server also returns a `reasoning` field holding the model's
+    // scratchpad, and a server may put a `reasoning_content` or `thinking` field next to it; none of
+    // them is read here, so hidden reasoning cannot reach the panel. The prompt also asks the model
+    // not to narrate its thinking into the answer (see `SYSTEM_PROMPT`).
     let text_out = msg.get("content").and_then(Value::as_str).unwrap_or("").to_string();
     let mut tool_calls = Vec::new();
     for call in msg.get("tool_calls").and_then(Value::as_array).into_iter().flatten() {
@@ -222,6 +230,44 @@ pub enum TurnEnd {
     Cancelled,
 }
 
+/// What the model is told before every turn.
+///
+/// Two things matter here. **No narration of reasoning**: a provider may return a scratchpad field,
+/// and a model may also write its thinking into the answer; neither belongs in the panel, and the
+/// plan says hidden reasoning is not exposed. **Work, do not ask**: the turn is one shot with tools,
+/// so a model that ends with a question wastes it.
+///
+/// The tool names are not listed: the catalog's definitions describe themselves, and a hard-coded
+/// list would drift from it.
+pub const SYSTEM_PROMPT: &str = "\
+You are the design assistant built into FigCraft, a design tool whose canvas you edit through tools.
+
+How to work:
+- Act on the request with the tools you are given. Do not ask for confirmation: the user asked once
+  and expects a result, and every edit you make is one undo step they can revert.
+- **Build first.** The document starts empty unless the user says otherwise, and you are told what
+  the user asked: start creating. Do not spend rounds inspecting an empty document, listing
+  commands or checking the UI to decide what to do. At most one look at the document is useful, and
+  only if the user asks to change something that already exists.
+- **Do not inspect what you just made.** You know what you created and its ids come back in the tool
+  result. A screenshot or another inspect after your own edit tells you nothing you do not already
+  know, and it costs a round.
+- **Screenshots are not useful to you.** The canvas is empty at the start; do not take one to plan.
+- Build a real layout: frames with sensible sizes, auto layout where a stack of things belongs, text
+  with a readable size and line height, and the whole thing laid out rather than overlapping.
+- Prefer `batch` to create many layers in one call: a whole screen in one batch is one round, where
+  one call per layer wastes the whole turn.
+- The turn has a limited number of rounds and of tool calls, so spend them on design.
+
+How to answer:
+- Do not describe your reasoning, your plan, or the steps you are about to take. Do not narrate
+  what you are about to do before a tool call. Your thinking stays out of the answer.
+- When you are done, reply with one or two short sentences saying what you built. No headings, no
+  bullet lists, no restating the request.
+
+Coordinates are page units with y downward; x and y are relative to the parent frame.
+";
+
 /// Run one turn: ask the model, run the tools it asks for, repeat until it answers.
 ///
 /// This is the loop the plan requires not to be rewritten per surface: the same function serves the
@@ -250,13 +296,21 @@ pub fn run_turn(
     let wire = wire_tools(&defs_json);
 
     // The conversation: the request, then each round's assistant message and tool results.
-    let mut messages: Vec<Value> = vec![json!({"role": "user", "content": request})];
+    // A system message first: it keeps the answer out of a thinking-out-loud register, tells the
+    // model to work rather than narrate, and says how the result will land so it does not ask.
+    let mut messages: Vec<Value> = vec![json!({"role": "system", "content": SYSTEM_PROMPT}), json!({"role": "user", "content": request})];
     let mut rounds = 0u32;
     let mut calls = 0u32;
+    // A wall clock stops a turn whose rounds crawl: one round can take minutes on a slow provider,
+    // so the round and call counts alone do not bound the turn's duration.
+    let started = std::time::Instant::now();
 
     loop {
         if cancel.is_cancelled() {
             return TurnEnd::Cancelled;
+        }
+        if started.elapsed() >= std::time::Duration::from_secs(u64::from(limits.max_seconds)) {
+            return TurnEnd::Stopped(AgentErrorKind::Timeout, format!("the turn ran past its {} second limit", limits.max_seconds));
         }
         if limits.rounds_exhausted(rounds) {
             return TurnEnd::Stopped(AgentErrorKind::Model, format!("the turn used its {} rounds without an answer", limits.max_rounds));

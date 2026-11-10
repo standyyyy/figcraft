@@ -37,8 +37,11 @@ pub struct Limits {
 impl Default for Limits {
     fn default() -> Self {
         Self {
-            max_rounds: 12,
-            max_tool_calls: 40,
+            // Generous enough for a real screen: a model builds a complex layout one or two tools
+            // per round, so a dozen rounds cut a prototype off halfway. Still finite, because a model
+            // that loops on one tool must not run forever.
+            max_rounds: 50,
+            max_tool_calls: 120,
             max_tool_args_bytes: 256 * 1024,
             max_tool_result_bytes: 512 * 1024,
             max_seconds: 600,

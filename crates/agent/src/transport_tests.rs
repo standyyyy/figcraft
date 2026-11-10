@@ -175,3 +175,68 @@ fn no_credential_means_no_authorization_header() {
     let c = config("http://127.0.0.1:8000", "m");
     assert_eq!(c.credential(), None, "the config carries no credential");
 }
+
+// ---------- reasoning stays out, and a stopped turn keeps its work ----------
+
+#[test]
+fn a_providers_reasoning_field_never_becomes_the_answer() {
+    // DeepSeek-shaped servers return the model's scratchpad in `reasoning`. It is not an answer: the
+    // plan says hidden reasoning is not exposed, so `parse_message` reads `content` only.
+    let body = json!({
+        "model": "m",
+        "choices": [{
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": "I built the sidebar.",
+                "reasoning": "We need a sidebar. First a frame, then rows. Let me think about widths...",
+                "reasoning_content": "another scratchpad shape",
+                "thinking": "yet another"
+            },
+            "finish_reason": "stop"
+        }]
+    })
+    .to_string();
+    let m = parse_message(&body).expect("parsed");
+    assert_eq!(m.text, "I built the sidebar.", "only the answer is read");
+    for leaked in ["sidebar. First a frame", "another scratchpad", "yet another", "We need"] {
+        assert!(!m.text.contains(leaked), "reasoning must not reach the answer: {:?}", m.text);
+    }
+}
+
+#[test]
+fn a_turn_that_answers_in_reasoning_only_has_no_text() {
+    // A model that thinks but says nothing produces an empty answer, not its scratchpad.
+    let body = json!({"choices": [{"index": 0, "message": {"role": "assistant", "content": null, "reasoning": "thinking only"}}]}).to_string();
+    let m = parse_message(&body).expect("parsed");
+    assert_eq!(m.text, "", "no content means no answer");
+    assert!(!m.text.contains("thinking only"));
+}
+
+#[test]
+fn the_system_prompt_forbids_narrating_reasoning_and_asking() {
+    // The prompt is part of the behaviour: it keeps the answer in an "I built X" register and stops a
+    // model from ending a one-shot turn with a question.
+    use crate::transport::SYSTEM_PROMPT;
+    let lower = SYSTEM_PROMPT.to_lowercase();
+    assert!(lower.contains("do not describe your reasoning"), "it forbids narrating reasoning");
+    assert!(lower.contains("do not ask for confirmation"), "it forbids asking first");
+    assert!(lower.contains("one or two short sentences"), "it bounds the answer");
+    // It must not hard-code tool names, which would drift from the catalog.
+    for tool in ["create_node", "set_properties", "inspect_document", "upsert_requirements"] {
+        assert!(!SYSTEM_PROMPT.contains(tool), "the prompt names no tool: {tool}");
+    }
+}
+
+#[test]
+fn the_turn_limits_are_generous_enough_for_a_real_screen() {
+    // A dozen rounds cut a prototype off halfway: a model builds a layout a couple of tools per round.
+    // These are the numbers that made a complex request fail with 14 tool calls done and nothing left.
+    let l = crate::run::Limits::default();
+    assert!(l.max_rounds >= 40, "rounds: {}", l.max_rounds);
+    assert!(l.max_tool_calls >= 100, "tool calls: {}", l.max_tool_calls);
+    // Still finite, so a model looping on one tool cannot run forever.
+    assert!(l.max_rounds < 1000);
+    assert!(l.max_tool_calls < 1000);
+    assert!(l.max_seconds > 0, "a wall clock still bounds a turn");
+}

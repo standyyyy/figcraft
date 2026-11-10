@@ -254,21 +254,43 @@ fn run_turn(
         figcraft_agent::transport::TurnEnd::Cancelled => {
             push_event(events, AgentEvent::Cancelled { turn });
         }
-        figcraft_agent::transport::TurnEnd::Stopped(kind, message) => {
-            push_event(events, AgentEvent::Failed { turn, kind, message });
-        }
         figcraft_agent::transport::TurnEnd::Answered(_) => {
-            // The shadow holds the edits; hand the replay to the UI thread, which commits it against
-            // the live document only if the revision still matches.
-            let steps = tools.into_shadow().map(|sh| sh.replay().to_vec()).unwrap_or_default();
-            if !steps.is_empty() {
-                let json: Vec<Value> = steps.iter().map(|s: &ReplayStep| serde_json::json!({"command": s.command, "params": s.params})).collect();
-                if let Ok(mut slot) = replay.lock() {
-                    *slot = Some(json);
-                }
-            }
-            push_event(events, AgentEvent::Committed { turn, undo_label: figcraft_agent::shadow::undo_label(request) });
+            hand_over(tools, replay, events, turn, request, None);
         }
+        figcraft_agent::transport::TurnEnd::Stopped(kind, message) => {
+            // A turn stopped by a limit is not a failure of the model's work so far: it built what it
+            // built. Committing that is better than discarding it, which is what an empty failure
+            // meant -- a person watched the Agent work and got nothing. The message says the turn was
+            // cut short, so the partial result is not mistaken for a finished one.
+            let note = format!("{message}; the part it completed is kept");
+            hand_over(tools, replay, events, turn, request, Some((kind, note)));
+        }
+    }
+}
+
+/// Give a finished turn's edits to the UI thread, and report how it ended.
+///
+/// `stopped` says the turn hit a limit rather than answering: the edits still go, because a partial
+/// prototype is more use than an empty canvas, but the panel is told the turn was cut short. A turn
+/// with nothing to apply reports `Committed` with no replay, which the panel shows as done.
+fn hand_over(
+    tools: figcraft_agent::tools::ShadowTools,
+    replay: &std::sync::Arc<std::sync::Mutex<Option<Vec<Value>>>>,
+    events: &std::sync::Arc<std::sync::Mutex<Vec<AgentEvent>>>,
+    turn: u64,
+    request: &str,
+    stopped: Option<(AgentErrorKind, String)>,
+) {
+    let steps = tools.into_shadow().map(|sh| sh.replay().to_vec()).unwrap_or_default();
+    if !steps.is_empty() {
+        let json: Vec<Value> = steps.iter().map(|s: &ReplayStep| serde_json::json!({"command": s.command, "params": s.params})).collect();
+        if let Ok(mut slot) = replay.lock() {
+            *slot = Some(json);
+        }
+    }
+    match stopped {
+        Some((kind, message)) => push_event(events, AgentEvent::Failed { turn, kind, message }),
+        None => push_event(events, AgentEvent::Committed { turn, undo_label: figcraft_agent::shadow::undo_label(request) }),
     }
 }
 

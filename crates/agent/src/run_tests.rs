@@ -251,3 +251,34 @@ fn the_default_limits_bound_every_runaway_dimension() {
     assert!(limits.max_seconds > 0 && limits.max_seconds <= 3600, "a turn cannot run for hours");
     assert!(limits.max_transcript_bytes > 0);
 }
+
+#[test]
+fn a_turn_stopped_by_a_limit_still_keeps_what_it_built() {
+    // What this pins: a request for a whole screen used its rounds, and the worker's Stopped arm
+    // dropped the shadow -- 14 tool calls of work, an empty canvas, and a person watching with
+    // nothing to show. A stopped turn is cut short, not wasted: its edits are committed and the
+    // panel is told it was cut short.
+    use crate::run::{AgentEvent, AgentRun, Limits, Outcome};
+    let limits = Limits::default();
+    let mut run = AgentRun::new(1, "build the sidebar");
+    run.apply(&AgentEvent::ToolFinished { turn: 1, name: "batch".into(), ok: true }, &limits);
+    run.apply(
+        &AgentEvent::Failed {
+            turn: 1,
+            kind: crate::AgentErrorKind::Model,
+            message: "the turn used its rounds; the part it completed is kept".into(),
+        },
+        &limits,
+    );
+    assert_eq!(run.outcome, Some(Outcome::Failed), "a cut-short turn reports the limit");
+    assert_eq!(run.tools.len(), 1, "what it built is on the record");
+}
+
+#[test]
+fn the_default_turn_budget_fits_a_real_screen() {
+    // 12 rounds cut a prototype off halfway: a model spends rounds creating and a few inspecting.
+    let l = Limits::default();
+    let (rounds, calls) = (l.max_rounds, l.max_tool_calls);
+    assert!(rounds >= 40, "rounds: {rounds}");
+    assert!(calls >= 100, "tool calls: {calls}");
+}

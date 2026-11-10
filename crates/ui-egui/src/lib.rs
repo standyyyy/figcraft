@@ -19,6 +19,7 @@ pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
 pub mod a11y;
 pub mod agent;
 pub mod agent_credentials;
+pub mod agent_driver;
 pub mod agent_host;
 /// The browser Agent host: one local future per turn, driven by the page's event loop.
 #[cfg(target_arch = "wasm32")]
@@ -64,6 +65,8 @@ mod a11y_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod agent_host_tests;
 
+#[cfg(test)]
+mod agent_driver_tests;
 #[cfg(test)]
 mod agent_export_tests;
 #[cfg(test)]

@@ -232,6 +232,34 @@ impl TurnDriver {
 
     /// A driver that is already finished, for a turn that could not start.
     ///
+    /// No shadow is needed and none is fabricated: a turn against a made-up document could apply
+    /// commands to a file the Agent never inspected, so a failure before the document is read has
+    /// nothing to run against and says so.
+    pub fn failed_before_start(turn: u64, kind: AgentErrorKind, message: String) -> Self {
+        Self {
+            turn,
+            document_uid: 0,
+            base_revision: 0,
+            request: String::new(),
+            limits: Limits::default(),
+            cancel: CancelToken::new(),
+            // Empty by construction: no command can be recorded, so no replay can be produced.
+            tools: ShadowTools::none(),
+            stream: Box::pin(futures::stream::empty()),
+            started: std::time::Instant::now(),
+            deadline: std::time::Instant::now(),
+            answer: String::new(),
+            tool_calls: 0,
+            rounds: 0,
+            pending_tools: std::collections::VecDeque::new(),
+            continuation: Vec::new(),
+            events: Vec::new(),
+            outcome: Some(StreamOutcome::Failed(kind, message)),
+        }
+    }
+
+    /// A driver that is already finished, for a turn that could not start.
+    ///
     /// The browser host builds one when the snapshot cannot be read, so it can report a terminal
     /// through the same path as any other turn instead of needing a special case.
     pub fn from_terminal(terminal: TurnTerminal, shadow: Shadow) -> Self {

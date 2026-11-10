@@ -79,6 +79,30 @@ pub struct TurnRequest {
     pub cancel: figcraft_agent::run::CancelToken,
 }
 
+impl TurnRequest {
+    /// The turn this request describes, with `cancel` as its cancellation.
+    ///
+    /// One helper so both hosts build the same turn: a field added to `Turn` then reaches both, and the
+    /// cancellation token is always the one the host returned to the UI.
+    pub fn into_turn_with(self, cancel: figcraft_agent::run::CancelToken) -> figcraft_agent::runtime::Turn {
+        figcraft_agent::runtime::Turn {
+            turn: self.turn,
+            request: self.request,
+            document_uid: self.snapshot.uid,
+            base_revision: self.snapshot.revision,
+            config: self.config,
+            limits: self.limits,
+            cancel,
+            history: self.history,
+        }
+    }
+}
+
+/// The credentials a native host uses, for a driver built without one.
+pub fn host_credentials() -> figcraft_agent::EnvironmentCredentials {
+    figcraft_agent::EnvironmentCredentials
+}
+
 /// What a host is asked to do.
 pub enum HostRequest {
     /// Run a turn for `request` against `snapshot`.

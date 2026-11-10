@@ -16,16 +16,20 @@ figcraft-format = { workspace = true }
 rig-agent = { workspace = true }
 rig-core = { workspace = true }
 # Driving Rig's streaming stream from a blocking worker thread. Already in the graph through
-# Rig and ureq; declared here because the code polls it directly.
+# Rig; declared here because the code polls it directly.
 futures = { workspace = true }
 futures-timer = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
-# The model transport: blocking HTTP, the same client the font store already ships.
+# Rig's transport, pinned directly.
 #
-# Native only. The browser has no sockets and uses fetch instead, and ureq's rustls feature would
-# pull ring and getrandom into the wasm build, which the wasm gate refuses (and which would be a
-# second TLS stack there). The transport module is compiled out on wasm for the same reason.
+# `rig-reqwest` and `reqwest` are pinned to the exact versions Rig 0.44 selects, so an unrelated
+# `cargo update` cannot move the HTTP stack under the Agent, and both stay `default-features = false`:
+# enabling a feature here would turn on native TLS beside the rustls Rig already uses, which is a
+# second TLS backend in one binary. The browser uses the same client through fetch.
+rig-reqwest = { version = "=0.44.0", default-features = false }
+reqwest = { version = "=0.13.5", default-features = false }
+
+# Native only: the platform's file dialogs and sockets.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-ureq = { workspace = true }

@@ -1861,11 +1861,12 @@ dependencies = [
  "futures",
  "futures-timer",
  "log",
+ "reqwest",
  "rig-agent",
  "rig-core",
+ "rig-reqwest",
  "serde",
  "serde_json",
- "ureq",
 ]
 
 [[package]]

@@ -71,6 +71,14 @@ impl ShadowTools {
         }
     }
 
+    /// Tools with no shadow at all: every call is refused, so no command can be recorded.
+    ///
+    /// For a turn that failed before its document was read. Nothing can run, so nothing can be
+    /// replayed, which is the property a fabricated empty shadow would not have had.
+    pub fn none() -> Self {
+        Self { shadow: Arc::new(Mutex::new(None)), policy: ToolPolicy::EmbeddedAgent }
+    }
+
     /// Every tool Rig should advertise, in catalog order.
     pub fn definitions(&self) -> Vec<DynamicTool> {
         figcraft_agent_tools::tool_definitions(self.policy).into_iter().filter_map(|def| self.adapter(def)).collect()

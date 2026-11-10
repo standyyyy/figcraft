@@ -153,9 +153,11 @@ FIGCRAFT_AGENT_LIVE_MODEL=DeepSeek-V4.1-Flash-1017 \
 cargo test -p figcraft-agent --test live_vllm -- --ignored --nocapture
 ```
 
-A key, when the endpoint needs one, is named by `FIGCRAFT_AI_API_KEY_NAME` and read from that
-variable; no key is committed and none is printed. The test checks a text answer, a canvas tool call
-with usable arguments, and a structured requirements document.
+A key, when the endpoint needs one, is passed as `FIGCRAFT_AGENT_LIVE_KEY` itself and held in memory
+for the process; no key is committed and none is printed. The suite checks streamed deltas, a canvas
+tool call whose replay is one batch, a follow-up continuing the previous turn, cancellation and a
+stale revision both committing nothing, a requirements document written through document-local
+commands, and the connection check.
 
 ## What is not here
 

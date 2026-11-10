@@ -183,39 +183,12 @@ impl Orchestrator {
     }
 }
 
-/// Build a driver from a request, or a finished driver that reports why it could not start.
+/// Build the driver for `req`, resolving keys through this browser's session store.
+///
+/// The construction itself is target-independent and lives in [`crate::agent_driver`], so native CI
+/// compiles and tests it; only scheduling a turn on the page's event loop is browser-specific.
 fn build_driver(req: TurnRequest, credentials: &crate::agent_credentials::SessionResolver) -> TurnDriver {
-    let turn_no = req.turn;
-    let (session, failure) = match crate::agent_host::shadow_session_from_snapshot(&req.snapshot) {
-        Ok(s) => (s, None),
-        // A snapshot that cannot be read is a configuration problem: report it as a terminal rather
-        // than panicking on the page's thread.
-        Err(message) => (figcraft_engine::Session::new(), Some((figcraft_agent::AgentErrorKind::Configuration, message))),
-    };
-    let shadow = match (figcraft_agent::shadow::Shadow::capture(&session), failure) {
-        (Ok(shadow), None) => shadow,
-        (Ok(shadow), Some((kind, message))) => {
-            return TurnDriver::from_terminal(TurnTerminal::Failed { turn: turn_no, kind, message }, shadow);
-        }
-        (Err(e), _) => {
-            let fallback = figcraft_agent::shadow::Shadow::capture(&figcraft_engine::Session::new()).unwrap_or_else(|_| {
-                figcraft_agent::shadow::Shadow::capture(&figcraft_engine::Session::with_document(figcraft_doc::Document::new("untitled")))
-                    .expect("empty")
-            });
-            return TurnDriver::from_terminal(TurnTerminal::Failed { turn: turn_no, kind: e.kind, message: e.message }, fallback);
-        }
-    };
-    let turn = figcraft_agent::runtime::Turn {
-        turn: req.turn,
-        request: req.request,
-        document_uid: req.snapshot.uid,
-        base_revision: req.snapshot.revision,
-        config: req.config,
-        limits: req.limits,
-        cancel: req.cancel,
-        history: req.history,
-    };
-    TurnDriver::start(turn, shadow, credentials)
+    crate::agent_driver::build_driver_with_credentials(req, credentials)
 }
 
 #[cfg(test)]

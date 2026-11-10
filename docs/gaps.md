@@ -553,14 +553,14 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
   save/open, undo, live sync, branches, versions, and Markdown export with escaping. Conversations
   travel as a capped archive member and compact before a model's context, keeping the newest complete
   turns and an explicit summary.
-- **Measured, not claimed:** against the workspace's vLLM service the transport answers text (the
-  server returned a different model alias, accepted without validation), calls a canvas tool with
-  the exact arguments asked for, and writes a structured PRD (5 goals, 16 requirements, 11
-  acceptance criteria). The transport is native-only: the wasm gate correctly refused ureq's TLS
-  stack, and a browser fetch bridge is separate work.
+- **Measured, not claimed:** against the workspace's vLLM service the Agent streams delta by delta
+  (six in one measured answer), calls a canvas tool whose replay commits as one undo entry, continues
+  a follow-up from the previous turn's history, commits nothing on cancellation or a stale revision,
+  writes a structured PRD through document-local commands, and passes its connection check. The same
+  runtime runs in the browser: desktop drives it on a worker thread, the browser on a local future,
+  and both resolve credentials through one contract.
 - **Missing:** Figma AI's generation features (first draft, rename layers, remove background, image
-  generation and editing, visual search, Make), a browser fetch bridge, and streaming deltas (a turn
-  arrives as one text piece today).
+  generation and editing, visual search, Make).
 - **Estimate:** 26–52 h remaining with openly licensed local models, for the generation features
   beyond the chat-and-tools foundation. **Owner decision needed.**
 
@@ -634,7 +634,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 | 2026-10-29 | minor | Gap 7: the browser draws a zoom's full render a band at a time (eight at most), so a deep zoom no longer holds the page for the whole render; pans and edits meanwhile are patched in once it is drawn. Numbers unchanged |
 | 2026-10-28 | minor | Arabic draft: 1,857 UI strings, 620 command labels, 31 menu wordings; count-neutral plurals and web font gate. Native review and panel mirroring remain open; grade and estimates unchanged. Evidence: `locales/ar.toml`, i18n catalog tests and [translation notes](translating.md#arabic-draft) |
 | 2026-10-28 | minor | Gap 7: the browser refines a zoom's preview only once the zoom has paused for 120 ms, so a wheel zoom no longer runs a blocking full render between every two steps. Numbers unchanged |
-| 2026-11-10 | major | M13 foundation: an in-app Agent panel over a shared canvas-tool catalog, one-turn-one-undo through a shadow session with a revision guard, structured requirements documents as file data, capped and compacted transcripts, and a model transport verified against a real vLLM service. Native-only transport (the wasm gate refused ureq's TLS stack; a browser fetch bridge is separate). Gap 19 moves from not-started to foundation-landed, estimate 30–60 h → 26–52 h for the generation features beyond chat-and-tools |
+| 2026-11-10 | major | M13 foundation: an in-app Agent panel over a shared canvas-tool catalog, one-turn-one-undo through a shadow session with a revision guard, structured requirements documents as file data, capped and compacted transcripts, Rig's streaming loop on desktop and in the browser (a worker thread and a local future over one runtime), a typed terminal only a success can carry a replay in, and one ordered host queue that wakes the UI. Gap 19 moves from not-started to foundation-landed, estimate 30–60 h → 24–48 h for the generation features beyond chat-and-tools |
 | 2026-10-27 | minor | M12: the MCP agent feedback workflow landed (comments as tasks, `comment.prompt`, Copy for AI, `fix_comments` / `watch_comments`, `figcraft://comments`, a bounded event log, `events.poll` and `wait_for_changes`). Figma AI features and local models are still not started, so gap 19's missing list and estimate stand |
 | 2026-10-27 | minor | M6, #1397: damaged generated FigJam shape geometry falls back to usable outer fill or stroke outlines before a rectangle; a surviving sticky author no longer suppresses the outer body-text fallback. Synthetic regressions cover both outlines, missing/invalid/blank bodies, author retention and layer budgets. Numbers unchanged. |
 | 2026-10-26 | minor | M6, #1397: generated FigJam backgrounds read saved vector networks before rectangle fallback; missing or invalid generated text uses the outer text without discarding successful children or exceeding the layer budget. Regression tests cover both paths. Numbers unchanged. |

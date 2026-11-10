@@ -37,6 +37,7 @@ fn catalog_matches_the_existing_mcp_surface() {
         "get_requirements",
         "upsert_requirements",
         "export_requirements_markdown",
+        "render_requirements_markdown",
         "wait_for_changes",
     ];
     assert_eq!(TOOL_NAMES, expected, "TOOL_NAMES drifted from the MCP surface");
@@ -210,10 +211,14 @@ fn upsert_requirements_forwards_the_whole_structure() {
 
 #[test]
 fn the_requirements_tools_are_on_both_surfaces() {
-    for tool in ["list_requirements", "get_requirements", "upsert_requirements", "export_requirements_markdown"] {
+    // Reading and writing requirements is document-local; exporting to a path is not, so the Agent
+    // gets the read-only renderer instead.
+    for tool in ["list_requirements", "get_requirements", "upsert_requirements", "render_requirements_markdown"] {
         assert!(ToolPolicy::ExternalMcp.allows(tool), "{tool} stays available to external MCP");
-        assert!(ToolPolicy::EmbeddedAgent.allows(tool), "{tool} is document-local and replayable, so the Agent gets it too");
+        assert!(ToolPolicy::EmbeddedAgent.allows(tool), "{tool} is document-local, so the Agent gets it too");
     }
+    assert!(ToolPolicy::ExternalMcp.allows("export_requirements_markdown"), "writing a file stays external");
+    assert!(!ToolPolicy::EmbeddedAgent.allows("export_requirements_markdown"), "the Agent cannot write a file");
 }
 
 #[test]
@@ -247,7 +252,142 @@ fn export_returns_markdown_text_rather_than_a_json_wrapper() {
         }
     }
     let mut b = Markdown;
-    let r = call_tool(&mut b, ToolPolicy::EmbeddedAgent, "export_requirements_markdown", &json!({"id": "PRD:1"}));
+    let r = call_tool(&mut b, ToolPolicy::ExternalMcp, "export_requirements_markdown", &json!({"id": "PRD:1"}));
     assert!(!r.is_error);
     assert_eq!(r.first_text(), "# A title\n\nbody", "the raw Markdown is the tool result");
+}
+
+// ---------- the embedded policy is default-deny on commands ----------
+
+/// A backend that records every command it is asked to run.
+struct CommandRecorder {
+    ran: Vec<String>,
+}
+
+impl CommandRecorder {
+    fn new() -> Self {
+        Self { ran: Vec::new() }
+    }
+}
+
+impl crate::backend::Backend for CommandRecorder {
+    fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        if method == "engine.execute"
+            && let Some(cmd) = params.get("command").and_then(Value::as_str)
+        {
+            self.ran.push(cmd.to_string());
+        }
+        Ok(json!({"ok": true}))
+    }
+    fn has_ui(&self) -> bool {
+        false
+    }
+    fn describe(&self) -> String {
+        "recording".into()
+    }
+}
+
+#[test]
+fn the_embedded_agent_cannot_run_a_non_replayable_command() {
+    // `run_command` forwards any command id, so a model that names `file.save` or `edit.undo` reaches
+    // the engine. Those are not document-local replayable edits: a turn that saved a file or undid
+    // someone's work could not be committed as one batch, and undoing inside a turn would corrupt the
+    // history the turn is supposed to add one entry to.
+    for denied in ["file.open", "file.save", "file.saveAs", "file.export", "file.close", "edit.undo", "edit.redo"] {
+        let mut b = CommandRecorder::new();
+        let r = call_tool(&mut b, ToolPolicy::EmbeddedAgent, "run_command", &json!({"command": denied}));
+        assert!(r.is_error, "`{denied}` must be refused for the embedded Agent");
+        assert!(b.ran.is_empty(), "`{denied}` reached the engine: {:?}", b.ran);
+    }
+}
+
+#[test]
+fn the_embedded_agent_cannot_run_a_namespaced_command() {
+    // Namespaces whose whole family is outside the document: collaboration, plugins, UI input,
+    // clipboard, branches, sharing.
+    for denied in ["collab.join", "live.publish", "branch.review", "plugin.directory.install", "ui.pointer", "clipboard.copy"] {
+        let mut b = CommandRecorder::new();
+        let r = call_tool(&mut b, ToolPolicy::EmbeddedAgent, "run_command", &json!({"command": denied}));
+        assert!(r.is_error, "`{denied}` must be refused");
+        assert!(b.ran.is_empty(), "`{denied}` reached the engine");
+    }
+}
+
+#[test]
+fn a_batch_step_is_checked_too() {
+    // The bypass through `batch`: a denied command hidden in a step must refuse the whole call.
+    let mut b = CommandRecorder::new();
+    let r = call_tool(
+        &mut b,
+        ToolPolicy::EmbeddedAgent,
+        "batch",
+        &json!({"commands": [
+            {"command": "node.create", "params": {"type": "rectangle"}},
+            {"command": "file.save", "params": {}},
+        ]}),
+    );
+    assert!(r.is_error, "the batch must be refused");
+    assert!(!b.ran.iter().any(|c| c == "file.save"), "the denied step ran: {:?}", b.ran);
+}
+
+#[test]
+fn an_allowed_command_still_runs() {
+    // The policy is a filter, not a blanket denial: the document-local commands still work.
+    for allowed in ["node.create", "node.set", "edit.delete", "page.create", "requirements.upsert"] {
+        let mut b = CommandRecorder::new();
+        let r = call_tool(&mut b, ToolPolicy::EmbeddedAgent, "run_command", &json!({"command": allowed, "params": {}}));
+        assert!(!r.is_error, "`{allowed}` should be allowed: {}", r.first_text());
+        assert_eq!(b.ran, [allowed.to_string()], "`{allowed}` did not reach the engine");
+    }
+}
+
+#[test]
+fn an_unknown_command_is_refused_by_default() {
+    // A command added later must not become Agent-accessible by accident: the default is deny.
+    let mut b = CommandRecorder::new();
+    let r = call_tool(&mut b, ToolPolicy::EmbeddedAgent, "run_command", &json!({"command": "some.futureCommand"}));
+    assert!(r.is_error, "an unknown command is refused");
+    assert!(b.ran.is_empty());
+}
+
+#[test]
+fn every_engine_command_is_classified_explicitly() {
+    // This is the guard against silent widening: when a command is added to the registry, this test
+    // fails until it is classified for the embedded Agent. A command the policy has never heard of
+    // defaults to denied, which is safe; this test makes that default visible rather than quiet.
+    let all: Vec<&str> = figcraft_engine::all_commands().iter().map(|c| c.id).collect();
+    assert!(!all.is_empty(), "the registry is readable");
+    let mut unclassified = Vec::new();
+    for id in &all {
+        // `allows_command` answers for every id: allowed, or denied by the explicit rule.
+        let allowed = crate::catalog::allows_command(ToolPolicy::EmbeddedAgent, id);
+        // A command is "classified" when it is explicitly named either way. Denied-by-default is the
+        // safe side, so only record the ones nobody has looked at.
+        if !allowed && !crate::catalog::is_explicitly_denied(id) {
+            unclassified.push(*id);
+        }
+    }
+    assert!(
+        unclassified.is_empty(),
+        "{} commands reach the embedded Agent decision without an explicit rule: {:?}",
+        unclassified.len(),
+        &unclassified[..unclassified.len().min(20)]
+    );
+}
+
+#[test]
+fn the_embedded_agent_cannot_write_a_file_through_the_export_tool() {
+    // `export_requirements_markdown` takes a path, which is file I/O the Agent must not do: a turn
+    // that wrote a file could not be replayed as a document edit.
+    let mut b = CommandRecorder::new();
+    let r = call_tool(&mut b, ToolPolicy::EmbeddedAgent, "export_requirements_markdown", &json!({"id": "PRD:1", "path": "/tmp/out.md"}));
+    assert!(r.is_error, "a path-taking export is refused for the embedded Agent");
+    assert!(b.ran.is_empty(), "nothing ran");
+}
+
+#[test]
+fn the_embedded_agent_can_render_markdown_without_a_path() {
+    // Reading the Markdown is fine; only writing is not.
+    assert!(ToolPolicy::EmbeddedAgent.allows("render_requirements_markdown"), "the read-only renderer is offered");
+    assert!(!ToolPolicy::EmbeddedAgent.allows("export_requirements_markdown"), "the path-taking export is not");
 }

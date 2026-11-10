@@ -127,8 +127,188 @@ const EMBEDDED_TOOLS: &[&str] = &[
     "list_requirements",
     "get_requirements",
     "upsert_requirements",
-    "export_requirements_markdown",
+    "render_requirements_markdown",
 ];
+
+/// Namespaces whose every command is document-local and replayable.
+///
+/// A namespace here is an allowlist for the whole family: adding a command to one of them makes it
+/// reachable by the embedded Agent, so a new *namespace* is a deliberate decision, and a command that
+/// is not in one of these families is denied by default.
+const EMBEDDED_COMMAND_NAMESPACES: &[&str] = &[
+    // Creating, editing and arranging layers and pages.
+    "node.",
+    "shape.",
+    "edit.",
+    "object.",
+    "page.",
+    "arrange.",
+    "align.",
+    "transform.",
+    "select.",
+    "bool.",
+    // Style and paint.
+    "style.",
+    "fill.",
+    "stroke.",
+    "effect.",
+    "grid.",
+    "guide.",
+    "variable.",
+    // Components, in the document.
+    "component.",
+    // Everything about a requirements document except writing a file.
+    "requirements.",
+    // Text editing inside the document.
+    "text.",
+    "vector.",
+    "proto.",
+    "comment.",
+    "doc.",
+    "view.",
+    // Applying a paint or a colour style to the selection is a document edit.
+    "selection.setPaint",
+    "selection.applyColorStyle",
+    // Layout and arrangement of the document's own layers.
+    "frame.",
+    "layout.",
+    "distribute.",
+    "section.",
+    "instance.",
+    "shapeBuilder.",
+    "paint.",
+    "measure.",
+    // A batch assembles other commands, each checked on its own.
+    "command.batch",
+];
+
+/// Commands that a namespace would otherwise admit but the embedded Agent must not run.
+///
+/// These are the exceptions that make the family rule safe: each one reaches outside the document,
+/// undoes someone's work, or opens a dialog.
+const EMBEDDED_COMMAND_DENIED: &[&str] = &[
+    // Files: the Agent works in the open document, and a save or an export is not a replayable edit.
+    "file.open",
+    "file.save",
+    "file.saveAs",
+    "file.export",
+    "file.close",
+    "file.new",
+    "file.newBoard",
+    "file.rename",
+    "file.recover",
+    "file.openRecent",
+    "file.fontReport",
+    "file.markSaved",
+    "file.exportLayers",
+    "file.exportSvg",
+    "file.exportFramesPdf",
+    "file.import",
+    "file.placeImage",
+    "file.moveTab",
+    "file.colorProfile",
+    "file.duplicate",
+    "file.revert",
+    "file.saveVersion",
+    "file.versionHistory",
+    "file.newFromTemplate",
+    // Undo and redo would corrupt the one-entry-per-turn history the Agent commits into.
+    "edit.undo",
+    "edit.redo",
+    "edit.history",
+    // Requirements export writes a path; the panel's Export action does it instead.
+    "requirements.exportMarkdown",
+    // Every dialog, panel and app-level action is the user's, not the Agent's.
+    "app.preferences",
+    "app.actions",
+    "app.agent",
+    "app.quit",
+    "app.update",
+    "help.shortcuts",
+    "help.about",
+    "help.page",
+    "help.gettingStarted",
+    "panel.shortcuts",
+    "palette.actions",
+    "dialog.preferences",
+    "view.minimize",
+    "view.panels",
+    // Live sessions, sharing, branches and plugins: not document-local.
+    "collab.",
+    "live.",
+    "branch.",
+    "plugin.",
+    "online.",
+    "library.publish",
+    "library.publishToServer",
+    "library.check",
+    "library.acceptUpdates",
+    // UI input and the clipboard are the user's hands.
+    "ui.",
+    "clipboard.",
+    // Settings are the user's.
+    "pref.",
+    "version.",
+    // Tools, windows, boards, libraries, annotations and Dev Mode are UI state or other file kinds.
+    "tool.",
+    "window.",
+    "board.",
+    "library.",
+    "libraries.",
+    "image.",
+    "widget.",
+    "annotation.",
+    "dev.",
+    "devMode.",
+    "devResource.",
+    "codeConnect.",
+    "export.",
+    "template.",
+    "data.",
+    "font.",
+    "layers.",
+    "plugins.",
+    "inspect.",
+    // Selection helpers that touch app-level state rather than the document.
+    "selection.colors",
+    "selection.createColorStyle",
+    "selection.bindColorVariable",
+    "selection.detachColor",
+    "selection.selectColor",
+];
+
+/// Whether `command` may run inside an embedded Agent turn.
+///
+/// Default deny: a command is allowed only when its namespace is on the allowlist and it is not one
+/// of the explicit exceptions. A command added to the engine later therefore stays out of the Agent's
+/// reach until someone decides otherwise, which is the direction that cannot leak.
+pub fn allows_command(policy: ToolPolicy, command: &str) -> bool {
+    match policy {
+        // External MCP keeps its full surface: it is a client the user runs, not a turn that must
+        // replay as one document edit.
+        ToolPolicy::ExternalMcp => true,
+        ToolPolicy::EmbeddedAgent => {
+            if EMBEDDED_COMMAND_DENIED.iter().any(|d| command == *d || (d.ends_with('.') && command.starts_with(d))) {
+                return false;
+            }
+            EMBEDDED_COMMAND_NAMESPACES.iter().any(|ns| command.starts_with(ns))
+        }
+    }
+}
+
+/// Whether `command` appears in one of the policy's explicit lists.
+///
+/// `allows_command` denies anything it has not heard of, which is the safe default. This says whether
+/// a person has actually looked at a command, so the test that enumerates the registry can fail when a
+/// new command would otherwise be silently denied (which is safe) or silently allowed (which is not).
+pub fn is_explicitly_denied(command: &str) -> bool {
+    EMBEDDED_COMMAND_DENIED.iter().any(|d| command == *d || (d.ends_with('.') && command.starts_with(d)))
+}
+
+/// Whether `command`'s namespace is on the embedded allowlist (before exceptions).
+pub fn is_explicitly_allowed(command: &str) -> bool {
+    EMBEDDED_COMMAND_NAMESPACES.iter().any(|ns| command.starts_with(ns)) && !is_explicitly_denied(command)
+}
 
 impl ToolPolicy {
     /// Whether this surface offers `name`.
@@ -163,6 +343,7 @@ pub const TOOL_NAMES: &[&str] = &[
     "get_requirements",
     "upsert_requirements",
     "export_requirements_markdown",
+    "render_requirements_markdown",
     "wait_for_changes",
 ];
 
@@ -495,6 +676,19 @@ fn tools() -> Vec<Value> {
             false,
         ),
         tool(
+            "render_requirements_markdown",
+            "Render requirements as Markdown",
+            "Render one requirements document as Markdown and return the text. Read-only: it never writes a file, which is why the embedded Agent is offered this and not `export_requirements_markdown`.",
+            obj(
+                json!({
+                    "id": string("The document's id (e.g. PRD:1), preferred over title"),
+                    "title": string("The document's title, used when no id is given"),
+                }),
+                &[],
+            ),
+            true,
+        ),
+        tool(
             "wait_for_changes",
             "Wait for changes",
             "Wait for new comment events in the attached FigCraft app. Returns pending events immediately; otherwise waits up to `timeoutMs` (default 20000, max 25000). Call it again with the returned `cursor` to keep watching. Headless returns immediately (no other writer). Events carry a sequence number, kind, document and a small payload (for comments, the thread id).",
@@ -686,8 +880,8 @@ pub fn call_tool(b: &mut dyn Backend, policy: ToolPolicy, name: &str, args: &Val
     };
     let r = match name {
         "list_commands" => list_commands(b, &a),
-        "run_command" => run_command(b, &a),
-        "batch" => batch(b, &a),
+        "run_command" => run_command(b, policy, &a),
+        "batch" => batch(b, policy, &a),
         "create_node" => create_node(b, &a),
         "set_properties" => set_properties(b, &a),
         "inspect_document" => inspect_document(b, &a),
@@ -710,6 +904,7 @@ pub fn call_tool(b: &mut dyn Backend, policy: ToolPolicy, name: &str, args: &Val
             Err(e) => Err(e),
         },
         "export_requirements_markdown" => requirements_export(b, &a),
+        "render_requirements_markdown" => requirements_render(b, &a),
         "wait_for_changes" => wait_for_changes(b, &a),
         other => Err(format!("unknown tool `{other}` (tools/list has: {})", TOOL_NAMES.join(", "))),
     };
@@ -730,6 +925,23 @@ fn requirements_target(b: &mut dyn Backend, a: &Map<String, Value>, command: &st
 /// Reading a document: the structure, with its Markdown alongside (JSON, because both are useful).
 fn requirements_read(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, String> {
     requirements_target(b, a, "requirements.get").map(|v| ToolResult::json(&v))
+}
+
+/// Rendering: the Markdown text, never a file.
+///
+/// The engine command it calls takes no path, so a model cannot reach the file system through it.
+fn requirements_render(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, String> {
+    let mut params = Map::new();
+    for key in ["id", "title"] {
+        if let Some(v) = a.get(key) {
+            params.insert(key.to_string(), v.clone());
+        }
+    }
+    let r = exec(b, "requirements.exportMarkdown", Value::Object(params))?;
+    match r.get("markdown").and_then(Value::as_str) {
+        Some(md) => Ok(ToolResult::text(md)),
+        None => Ok(ToolResult::json(&r)),
+    }
 }
 
 /// Exporting: the Markdown text itself, since that is what a model reads. Writing a file returns
@@ -799,8 +1011,13 @@ fn list_commands(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResu
     Ok(ToolResult::text(out))
 }
 
-fn run_command(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, String> {
+fn run_command(b: &mut dyn Backend, policy: ToolPolicy, a: &Map<String, Value>) -> Result<ToolResult, String> {
     let cmd = req_s(a, "command")?;
+    // Checked here, after parsing and before dispatch, so a model that names a non-advertised command
+    // directly is refused rather than reaching the engine.
+    if !allows_command(policy, cmd) {
+        return Err(format!("`{cmd}` is not available to this agent: it can only change the open document"));
+    }
     let params = match a.get("params") {
         None | Some(Value::Null) => json!({}),
         Some(v @ Value::Object(_)) => v.clone(),
@@ -811,7 +1028,7 @@ fn run_command(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult
     exec(b, cmd, params).map(|v| ToolResult::json(&v))
 }
 
-fn batch(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, String> {
+fn batch(b: &mut dyn Backend, policy: ToolPolicy, a: &Map<String, Value>) -> Result<ToolResult, String> {
     let Some(Value::Array(cmds)) = a.get("commands") else { return Err("`commands` must be an array of {command, params}".into()) };
     if cmds.is_empty() {
         return Err("`commands` is empty".into());
@@ -819,6 +1036,10 @@ fn batch(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, Stri
     let mut steps = Vec::with_capacity(cmds.len());
     for (i, c) in cmds.iter().enumerate() {
         let Some(cmd) = c.get("command").and_then(Value::as_str) else { return Err(format!("step {i}: `command` must be a string")) };
+        // A denied command hidable in a step is the bypass this closes: one refusal fails the batch.
+        if !allows_command(policy, cmd) {
+            return Err(format!("step {i}: `{cmd}` is not available to this agent: it can only change the open document"));
+        }
         let params = match c.get("params") {
             None | Some(Value::Null) => json!({}),
             Some(v @ Value::Object(_)) => v.clone(),

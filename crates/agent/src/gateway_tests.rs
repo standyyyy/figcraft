@@ -13,8 +13,8 @@ fn prefs(base_url: &str, model: &str) -> AgentPrefs {
 
 #[test]
 fn a_local_http_endpoint_is_accepted() {
-    let c = AgentConfig::from_prefs(&prefs("http://192.168.15.125:8111", "DeepSeek-V4.1-Flash-1017")).expect("valid");
-    assert_eq!(c.base_url(), "http://192.168.15.125:8111/v1", "`/v1` is appended exactly once");
+    let c = AgentConfig::from_prefs(&prefs("http://127.0.0.1:8111", "DeepSeek-V4.1-Flash-1017")).expect("valid");
+    assert_eq!(c.base_url(), "http://127.0.0.1:8111/v1", "`/v1` is appended exactly once");
     assert_eq!(c.model(), "DeepSeek-V4.1-Flash-1017");
     assert_eq!(c.credential(), None, "a local endpoint needs no credential");
     assert_eq!(c.timeout_seconds(), DEFAULT_AGENT_TIMEOUT_SECONDS);
@@ -48,7 +48,7 @@ fn https_is_refused_until_a_shared_transport_exists() {
 fn a_blank_or_unusable_url_is_refused() {
     assert_eq!(AgentConfig::from_prefs(&prefs("", "m")), Err(ConfigError::BlankUrl));
     assert_eq!(AgentConfig::from_prefs(&prefs("   ", "m")), Err(ConfigError::BlankUrl));
-    assert!(matches!(AgentConfig::from_prefs(&prefs("192.168.1.1:8000", "m")), Err(ConfigError::BadUrl(_))));
+    assert!(matches!(AgentConfig::from_prefs(&prefs("example.com:8000", "m")), Err(ConfigError::BadUrl(_))));
     assert!(matches!(AgentConfig::from_prefs(&prefs("ftp://x", "m")), Err(ConfigError::BadUrl(_))));
 }
 

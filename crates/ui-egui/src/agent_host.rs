@@ -10,6 +10,7 @@
 //! touches a `Session`, which is why the commit is a request rather than a host call.
 
 use figcraft_agent::AgentErrorKind;
+use figcraft_agent::TurnTerminal;
 use figcraft_agent::run::{AgentEvent, CancelToken, Limits};
 use serde_json::Value;
 
@@ -27,24 +28,27 @@ pub enum HostStatus {
 /// commits.
 #[derive(Clone, Debug, Default)]
 pub struct TurnOutcome {
-    /// The events, in order. The last one is terminal when the turn ended.
+    /// The progress events, in order, up to but not including the terminal one.
     pub events: Vec<AgentEvent>,
-    /// The replay log, to be committed by the app on the session owner thread.
+    /// How the turn ended, once.
     ///
-    /// `None` when the turn produced nothing to apply, or when it failed, was cancelled or found the
-    /// document stale: in those cases the app must not touch the document.
-    pub replay: Option<Vec<Value>>,
+    /// The replay lives **inside** the successful variant (see [`TurnTerminal`]), so a failure,
+    /// cancellation or limit cannot arrive with an edit to apply. The previous shape kept a
+    /// `replay: Option<Vec<Value>>` beside a separate terminal event, which allowed exactly that.
+    pub terminal: Option<TurnTerminal>,
 }
 
 impl TurnOutcome {
-    /// Whether the turn ended (a terminal event is present).
+    /// Whether the turn ended.
     pub fn is_finished(&self) -> bool {
-        self.events.last().is_some_and(AgentEvent::is_terminal)
+        self.terminal.is_some()
     }
 
-    /// The terminal event, if the turn ended.
-    pub fn terminal(&self) -> Option<&AgentEvent> {
-        self.events.iter().rev().find(|e| e.is_terminal())
+    /// The envelope to apply, if the turn succeeded with edits.
+    ///
+    /// The only route to a replay from a host: every other ending returns `None`.
+    pub fn commit(&self) -> Option<&figcraft_agent::CommitEnvelope> {
+        self.terminal.as_ref().and_then(TurnTerminal::commit)
     }
 }
 
@@ -97,8 +101,11 @@ pub trait AgentHost {
     /// Take the events produced since the last call. Never blocks.
     fn drain(&mut self) -> Vec<AgentEvent>;
 
-    /// The replay log of the turn that just finished, once, or `None` if there is none.
-    fn take_replay(&mut self) -> Option<Vec<Value>>;
+    /// How the turn that just finished ended, once.
+    ///
+    /// The replay travels inside a successful [`TurnTerminal`]; there is no separate channel for it,
+    /// so a failure cannot be paired with an edit to apply.
+    fn take_terminal(&mut self) -> Option<TurnTerminal>;
 
     /// Whether a turn is running.
     fn status(&self) -> HostStatus;
@@ -134,7 +141,7 @@ impl AgentHost for NoAgent {
         std::mem::take(&mut self.failed)
     }
 
-    fn take_replay(&mut self) -> Option<Vec<Value>> {
+    fn take_terminal(&mut self) -> Option<TurnTerminal> {
         None
     }
 

@@ -1033,12 +1033,13 @@ fn set_error(app: &mut crate::FigApp, message: &str) {
 
 /// Drain the host's events into the panel, once per frame.
 ///
-/// Called after the draw, so a frame never waits on the worker. When a turn commits, its replay is
+/// Called after the draw, so a frame never waits on the worker. When a turn succeeds, its envelope is
 /// applied here, on the UI thread, which is the only thread that touches the live document.
 pub fn poll_host(app: &mut crate::FigApp) {
     let Some(host) = app.ui.agent_host.as_mut() else { return };
     let events = host.drain();
-    if events.is_empty() {
+    let terminal = host.take_terminal();
+    if events.is_empty() && terminal.is_none() {
         return;
     }
     let limits = figcraft_agent::run::Limits::default();
@@ -1047,38 +1048,91 @@ pub fn poll_host(app: &mut crate::FigApp) {
             panel.apply(event, &limits);
         }
     }
-    // The terminal event ends the turn: take the replay and commit it.
-    if events.iter().any(figcraft_agent::run::AgentEvent::is_terminal) {
+    // The terminal value ends the turn. Only a success can carry an envelope, so a failure,
+    // cancellation or limit reaches `commit_turn` as no envelope at all.
+    if let Some(terminal) = terminal {
         app.ui.agent_running.finish();
-        if let Some(replay) = host.take_replay() {
-            commit_replay(app, replay);
+        apply_terminal(app, &terminal);
+    }
+}
+
+/// Report a turn's ending in the panel and, for a success, apply its envelope.
+///
+/// The envelope is rechecked here, at the one place that dispatches the batch: the turn id must be the
+/// one the panel is showing (a late result from an older turn must not land), and the document uid and
+/// revision must still be the ones the turn was built from. Checking at the snapshot instead would
+/// leave a window for the document to change between the check and the write.
+fn apply_terminal(app: &mut crate::FigApp, terminal: &figcraft_agent::TurnTerminal) {
+    match terminal {
+        figcraft_agent::TurnTerminal::Success { commit: Some(envelope), .. } => commit_turn(app, envelope),
+        figcraft_agent::TurnTerminal::Success { commit: None, .. } => {
+            // A read-only turn: it succeeded and changed nothing.
+            if let Some(panel) = app.ui.agent.as_mut() {
+                panel.status = RunStatus::Done;
+            }
+        }
+        figcraft_agent::TurnTerminal::LimitReached { message, .. } => {
+            if let Some(panel) = app.ui.agent.as_mut() {
+                panel.status = RunStatus::Failed;
+                panel.error = Some(message.clone());
+            }
+        }
+        figcraft_agent::TurnTerminal::Failed { message, .. } => {
+            if let Some(panel) = app.ui.agent.as_mut() {
+                panel.status = RunStatus::Failed;
+                panel.error = Some(message.clone());
+            }
+        }
+        figcraft_agent::TurnTerminal::Cancelled { .. } => {
+            if let Some(panel) = app.ui.agent.as_mut() {
+                panel.status = RunStatus::Cancelled;
+            }
         }
     }
 }
 
-/// Commit a finished turn's replay as one undo step.
+/// Apply a success's envelope as exactly one undo step, after rechecking the turn and the document.
 ///
-/// The replay is a list of canonical commands; `command.batch` applies them together, so the turn is
-/// one entry in the undo history and a failure rolls the whole thing back.
-fn commit_replay(app: &mut crate::FigApp, replay: Vec<serde_json::Value>) {
-    if replay.is_empty() {
+/// Three checks, all at the write: the turn is the one the panel shows (a late reply from a previous
+/// turn would otherwise apply into a newer one), the file is the one the Agent inspected, and the
+/// revision is exactly the one it was built from. Any mismatch applies nothing and says why.
+fn commit_turn(app: &mut crate::FigApp, envelope: &figcraft_agent::CommitEnvelope) {
+    if envelope.is_empty() {
         return;
     }
-    let label = app
-        .ui
-        .agent
-        .as_ref()
-        .and_then(|p| p.current.as_ref())
-        .map(|r| figcraft_agent::shadow::undo_label(&r.request))
-        .unwrap_or_else(|| "AI: change".to_string());
-    let batch = serde_json::json!({ "label": label, "commands": replay });
+    // The panel's current turn: a stale success must not land in a newer turn.
+    let shown = app.ui.agent.as_ref().and_then(|p| p.current.as_ref()).map(|r| r.turn);
+    if shown != Some(envelope.turn) {
+        set_conflict(app, "the Agent finished an older request, so its changes were not applied. Run the request again.");
+        return;
+    }
+    let Ok(ds) = app.session.ds() else {
+        set_conflict(app, "the file the Agent worked in is no longer open, so its changes were not applied.");
+        return;
+    };
+    let (uid, revision) = (ds.uid, ds.revision);
+    if let Some(reason) = envelope.refusal(uid, revision) {
+        set_conflict(app, &format!("{reason}, so its changes were not applied. Run the request again."));
+        return;
+    }
+    let batch = serde_json::json!({ "label": envelope.undo_label, "commands": envelope.batch_commands() });
     match app.session.execute("command.batch", &batch) {
         Ok(_) => {
             if let Some(panel) = app.ui.agent.as_mut() {
-                panel.last_undo_label = Some(label);
+                panel.last_undo_label = Some(envelope.undo_label.clone());
+                panel.status = RunStatus::Done;
             }
         }
-        Err(e) => set_error(app, &format!("the Agent's changes could not be applied: {e}")),
+        // The batch rolls itself back, so nothing landed.
+        Err(e) => set_conflict(app, &format!("the Agent's changes could not be applied together: {e}")),
+    }
+}
+
+/// A turn whose result cannot be applied: its own status, because the offer is to rerun.
+fn set_conflict(app: &mut crate::FigApp, message: &str) {
+    if let Some(panel) = app.ui.agent.as_mut() {
+        panel.status = RunStatus::Conflict;
+        panel.error = Some(message.to_string());
     }
 }
 

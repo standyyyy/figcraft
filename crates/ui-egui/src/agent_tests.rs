@@ -345,17 +345,27 @@ fn the_conversation_id_is_per_file() {
 struct Scripted {
     started: Vec<(u64, String)>,
     events: Vec<figcraft_agent::run::AgentEvent>,
-    replay: Option<Vec<serde_json::Value>>,
+    terminal: Option<figcraft_agent::TurnTerminal>,
     status: crate::agent_host::HostStatus,
 }
 
 impl Scripted {
     fn new() -> Self {
-        Self { started: Vec::new(), events: Vec::new(), replay: None, status: crate::agent_host::HostStatus::Idle }
+        Self { started: Vec::new(), events: Vec::new(), terminal: None, status: crate::agent_host::HostStatus::Idle }
     }
-    /// The turn a test wants: started, one tool, committed with `replay`.
-    fn committing(replay: Vec<serde_json::Value>) -> Self {
-        Self { replay: Some(replay), ..Self::new() }
+    /// A turn that succeeds with `replay`, built against `uid`/`revision`.
+    fn committing(replay: Vec<serde_json::Value>, uid: u64, revision: u64) -> Self {
+        let steps: Vec<figcraft_agent::shadow::ReplayStep> = replay
+            .iter()
+            .filter_map(|v| {
+                Some(figcraft_agent::shadow::ReplayStep {
+                    command: v.get("command")?.as_str()?.to_string(),
+                    params: v.get("params").cloned().unwrap_or(serde_json::Value::Null),
+                })
+            })
+            .collect();
+        let envelope = figcraft_agent::CommitEnvelope::new(1, uid, revision, steps, "AI: draw");
+        Self { terminal: Some(figcraft_agent::TurnTerminal::Success { turn: 1, answer: "done".into(), commit: Some(envelope) }), ..Self::new() }
     }
 }
 
@@ -376,8 +386,8 @@ impl crate::agent_host::AgentHost for Scripted {
     fn drain(&mut self) -> Vec<figcraft_agent::run::AgentEvent> {
         std::mem::take(&mut self.events)
     }
-    fn take_replay(&mut self) -> Option<Vec<serde_json::Value>> {
-        self.replay.take()
+    fn take_terminal(&mut self) -> Option<figcraft_agent::TurnTerminal> {
+        self.terminal.take()
     }
     fn status(&self) -> crate::agent_host::HostStatus {
         self.status
@@ -460,7 +470,8 @@ fn the_hosts_events_reach_the_panel_and_its_replay_commits() {
         "command": "node.create",
         "params": {"type": "rectangle", "width": 10.0, "height": 10.0}
     })];
-    app.ui.agent_host = Some(Box::new(Scripted::committing(replay)));
+    let (uid, revision) = app.session.ds().map(|d| (d.uid, d.revision)).expect("a document");
+    app.ui.agent_host = Some(Box::new(Scripted::committing(replay, uid, revision)));
     app.ui.agent_requests.push(Request::Send { request: "draw".into() });
     crate::agent::perform_requests(&mut app);
     let before = app.session.doc().expect("doc").nodes().count();
@@ -516,4 +527,146 @@ fn the_snapshot_is_a_document_the_worker_can_rebuild() {
     assert_eq!(doc.nodes().count(), app.session.doc().expect("doc").nodes().count(), "every layer came along");
     assert!(snapshot.uid > 0, "it names the file");
     assert!(snapshot.revision > 0, "and the revision the commit checks");
+}
+
+// ---------- the commit gate: turn, uid and revision ----------
+
+/// A scripted host whose terminal the test sets directly, so a stale envelope can be handed over.
+struct TerminalHost(Option<figcraft_agent::TurnTerminal>);
+
+impl crate::agent_host::AgentHost for TerminalHost {
+    fn start(&mut self, _request: crate::agent_host::HostRequest) -> figcraft_agent::run::CancelToken {
+        figcraft_agent::run::CancelToken::new()
+    }
+    fn drain(&mut self) -> Vec<figcraft_agent::run::AgentEvent> {
+        Vec::new()
+    }
+    fn take_terminal(&mut self) -> Option<figcraft_agent::TurnTerminal> {
+        self.0.take()
+    }
+    fn status(&self) -> crate::agent_host::HostStatus {
+        crate::agent_host::HostStatus::Idle
+    }
+    fn describe(&self) -> String {
+        "terminal".into()
+    }
+}
+
+fn current(app: &crate::FigApp) -> (u64, u64) {
+    let ds = app.session.ds().expect("a document");
+    (ds.uid, ds.revision)
+}
+
+#[test]
+fn a_matching_envelope_commits_as_one_undo_step() {
+    let mut app = harness_with(true);
+    let (uid, revision) = current(&app);
+    if let Some(p) = app.ui.agent.as_mut() {
+        p.begin_turn(1, "draw");
+    }
+    let step = figcraft_agent::shadow::ReplayStep {
+        command: "node.create".into(),
+        params: serde_json::json!({"type": "rectangle", "width": 10.0, "height": 10.0}),
+    };
+    let envelope = figcraft_agent::CommitEnvelope::new(1, uid, revision, vec![step], "AI: draw");
+    app.ui.agent_host =
+        Some(Box::new(TerminalHost(Some(figcraft_agent::TurnTerminal::Success { turn: 1, answer: "done".into(), commit: Some(envelope) }))));
+    let before = app.session.doc().expect("doc").nodes().count();
+
+    crate::agent::poll_host(&mut app);
+
+    assert_eq!(app.session.doc().expect("doc").nodes().count(), before + 1, "the envelope landed");
+    assert_eq!(app.session.undo_depth().0, 1, "as one undo step");
+    assert_eq!(app.ui.agent.as_ref().map(|p| p.status), Some(RunStatus::Done));
+}
+
+#[test]
+fn a_stale_revision_is_refused_and_nothing_is_applied() {
+    // The document moved on while the Agent worked: applying the envelope would overwrite whatever
+    // changed it. Nothing lands and the panel offers a rerun.
+    let mut app = harness_with(true);
+    let (uid, revision) = current(&app);
+    if let Some(p) = app.ui.agent.as_mut() {
+        p.begin_turn(1, "draw");
+    }
+    let step = figcraft_agent::shadow::ReplayStep { command: "node.create".into(), params: serde_json::json!({"type": "ellipse"}) };
+    // Built against a revision the document no longer has.
+    let envelope = figcraft_agent::CommitEnvelope::new(1, uid, revision + 5, vec![step], "AI: draw");
+    app.ui.agent_host =
+        Some(Box::new(TerminalHost(Some(figcraft_agent::TurnTerminal::Success { turn: 1, answer: "done".into(), commit: Some(envelope) }))));
+    let before = app.session.doc().expect("doc").nodes().count();
+    let depth = app.session.undo_depth();
+
+    crate::agent::poll_host(&mut app);
+
+    assert_eq!(app.session.doc().expect("doc").nodes().count(), before, "nothing was applied");
+    assert_eq!(app.session.undo_depth(), depth, "no undo step");
+    let panel = app.ui.agent.as_ref().expect("panel");
+    assert_eq!(panel.status, RunStatus::Conflict, "the panel offers a rerun");
+    assert!(panel.error.as_deref().is_some_and(|e| e.contains("changed")), "and says why: {:?}", panel.error);
+}
+
+#[test]
+fn an_envelope_for_another_document_is_refused() {
+    let mut app = harness_with(true);
+    let (uid, revision) = current(&app);
+    if let Some(p) = app.ui.agent.as_mut() {
+        p.begin_turn(1, "draw");
+    }
+    let step = figcraft_agent::shadow::ReplayStep { command: "node.create".into(), params: serde_json::json!({"type": "ellipse"}) };
+    let envelope = figcraft_agent::CommitEnvelope::new(1, uid + 99, revision, vec![step], "AI: draw");
+    app.ui.agent_host =
+        Some(Box::new(TerminalHost(Some(figcraft_agent::TurnTerminal::Success { turn: 1, answer: "done".into(), commit: Some(envelope) }))));
+    let before = app.session.doc().expect("doc").nodes().count();
+
+    crate::agent::poll_host(&mut app);
+
+    assert_eq!(app.session.doc().expect("doc").nodes().count(), before, "nothing was applied");
+    assert_eq!(app.ui.agent.as_ref().map(|p| p.status), Some(RunStatus::Conflict));
+}
+
+#[test]
+fn a_late_result_from_an_older_turn_is_refused() {
+    // A slow turn finishing after the panel moved on must not land in the newer one.
+    let mut app = harness_with(true);
+    let (uid, revision) = current(&app);
+    if let Some(p) = app.ui.agent.as_mut() {
+        p.begin_turn(7, "the newer request"); // the panel now shows turn 7
+    }
+    let step = figcraft_agent::shadow::ReplayStep { command: "node.create".into(), params: serde_json::json!({"type": "star"}) };
+    let envelope = figcraft_agent::CommitEnvelope::new(3, uid, revision, vec![step], "AI: the older one");
+    app.ui.agent_host =
+        Some(Box::new(TerminalHost(Some(figcraft_agent::TurnTerminal::Success { turn: 3, answer: "old".into(), commit: Some(envelope) }))));
+    let before = app.session.doc().expect("doc").nodes().count();
+
+    crate::agent::poll_host(&mut app);
+
+    assert_eq!(app.session.doc().expect("doc").nodes().count(), before, "the stale turn did not land");
+    let panel = app.ui.agent.as_ref().expect("panel");
+    assert_eq!(panel.status, RunStatus::Conflict);
+    assert!(panel.error.as_deref().is_some_and(|e| e.contains("older")), "and says so: {:?}", panel.error);
+}
+
+#[test]
+fn a_limited_turn_applies_nothing() {
+    // A turn cut short by a limit is not a finished turn: its edits are dropped by the typed terminal.
+    let mut app = harness_with(true);
+    if let Some(p) = app.ui.agent.as_mut() {
+        p.begin_turn(1, "draw");
+    }
+    app.ui.agent_host = Some(Box::new(TerminalHost(Some(figcraft_agent::TurnTerminal::LimitReached {
+        turn: 1,
+        kind: figcraft_agent::AgentErrorKind::Model,
+        message: "the turn used its rounds".into(),
+    }))));
+    let before = app.session.doc().expect("doc").nodes().count();
+    let depth = app.session.undo_depth();
+
+    crate::agent::poll_host(&mut app);
+
+    assert_eq!(app.session.doc().expect("doc").nodes().count(), before);
+    assert_eq!(app.session.undo_depth(), depth);
+    let panel = app.ui.agent.as_ref().expect("panel");
+    assert_eq!(panel.status, RunStatus::Failed);
+    assert!(panel.error.as_deref().is_some_and(|e| e.contains("rounds")));
 }

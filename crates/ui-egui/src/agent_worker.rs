@@ -13,9 +13,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 
 use figcraft_agent::run::{AgentEvent, CancelToken, Limits};
-use figcraft_agent::shadow::ReplayStep;
 use figcraft_agent::{AgentConfig, AgentErrorKind, ModelGateway};
-use serde_json::Value;
 
 use crate::agent_host::{AgentHost, HostRequest, HostStatus, Snapshot};
 
@@ -46,8 +44,11 @@ pub struct WorkerHost {
     jobs: Option<Sender<Job>>,
     /// Events the worker produced, shared with the UI thread.
     events: Arc<Mutex<Vec<AgentEvent>>>,
-    /// The replay log of the last finished turn.
-    replay: Arc<Mutex<Option<Vec<Value>>>>,
+    /// How the last finished turn ended, once.
+    ///
+    /// A [`TurnTerminal`], not a bare replay: only its successful variant can hold an edit, which is
+    /// what makes "failed, yet with something to apply" unrepresentable here too.
+    terminal: Arc<Mutex<Option<figcraft_agent::TurnTerminal>>>,
     /// The running turn's cancellation flag.
     cancel: Option<CancelToken>,
     /// Whether a turn is in flight.
@@ -74,7 +75,14 @@ pub const WORKER_NAME: &str = "figcraft-agent";
 impl WorkerHost {
     /// A host with no thread yet: one starts at the first turn.
     pub fn new() -> Self {
-        Self { jobs: None, events: Arc::new(Mutex::new(Vec::new())), replay: Arc::new(Mutex::new(None)), cancel: None, running: false, thread: None }
+        Self {
+            jobs: None,
+            events: Arc::new(Mutex::new(Vec::new())),
+            terminal: Arc::new(Mutex::new(None)),
+            cancel: None,
+            running: false,
+            thread: None,
+        }
     }
 
     /// Start the worker if it is not running.
@@ -84,10 +92,10 @@ impl WorkerHost {
         }
         let (tx, rx) = channel::<Job>();
         let events = Arc::clone(&self.events);
-        let replay = Arc::clone(&self.replay);
+        let terminal = Arc::clone(&self.terminal);
         let handle = std::thread::Builder::new()
             .name(WORKER_NAME.into())
-            .spawn(move || worker_loop(rx, events, replay))
+            .spawn(move || worker_loop(rx, events, terminal))
             // A thread that cannot start means no Agent; the failure is reported by `start`.
             .ok();
         self.jobs = Some(tx);
@@ -167,8 +175,8 @@ impl AgentHost for WorkerHost {
         events
     }
 
-    fn take_replay(&mut self) -> Option<Vec<Value>> {
-        self.replay.lock().ok().and_then(|mut r| r.take())
+    fn take_terminal(&mut self) -> Option<figcraft_agent::TurnTerminal> {
+        self.terminal.lock().ok().and_then(|mut t| t.take())
     }
 
     fn status(&self) -> HostStatus {
@@ -182,12 +190,12 @@ impl AgentHost for WorkerHost {
 }
 
 /// The worker loop: one job at a time, until Stop.
-fn worker_loop(rx: Receiver<Job>, events: Arc<Mutex<Vec<AgentEvent>>>, replay: Arc<Mutex<Option<Vec<Value>>>>) {
+fn worker_loop(rx: Receiver<Job>, events: Arc<Mutex<Vec<AgentEvent>>>, terminal: Arc<Mutex<Option<figcraft_agent::TurnTerminal>>>) {
     while let Ok(job) = rx.recv() {
         match job {
             Job::Stop => break,
             Job::Run(job) => {
-                run_turn(job.turn, &job.request, &job.snapshot, &job.limits, &job.config, &job.cancel, &events, &replay);
+                run_turn(job.turn, &job.request, &job.snapshot, &job.limits, &job.config, &job.cancel, &events, &terminal);
             }
         }
     }
@@ -205,7 +213,7 @@ fn run_turn(
     config: &AgentConfig,
     cancel: &CancelToken,
     events: &Arc<Mutex<Vec<AgentEvent>>>,
-    replay: &Arc<Mutex<Option<Vec<Value>>>>,
+    terminal_slot: &Arc<Mutex<Option<figcraft_agent::TurnTerminal>>>,
 ) {
     push_event(events, AgentEvent::Started { turn });
 
@@ -250,48 +258,58 @@ fn run_turn(
     let mut emit = |event: AgentEvent| push_event(events, event);
     let end = figcraft_agent::transport::run_turn(config, credential.as_deref(), &transport, &tools, turn, request, limits, cancel, &mut emit);
 
-    match end {
+    // One value says how the turn ended, and only its success variant can hold an edit. The shadow is
+    // consumed on every path: applying the commands is only ever reachable from `Succeeded`.
+    let terminal = match end {
+        figcraft_agent::transport::TurnEnd::Answered(answer) => finish_success(tools, turn, snapshot, request, answer),
         figcraft_agent::transport::TurnEnd::Cancelled => {
-            push_event(events, AgentEvent::Cancelled { turn });
-        }
-        figcraft_agent::transport::TurnEnd::Answered(_) => {
-            hand_over(tools, replay, events, turn, request, None);
+            drop(tools);
+            figcraft_agent::TurnTerminal::Cancelled { turn }
         }
         figcraft_agent::transport::TurnEnd::Stopped(kind, message) => {
-            // A turn stopped by a limit is not a failure of the model's work so far: it built what it
-            // built. Committing that is better than discarding it, which is what an empty failure
-            // meant -- a person watched the Agent work and got nothing. The message says the turn was
-            // cut short, so the partial result is not mistaken for a finished one.
-            let note = format!("{message}; the part it completed is kept");
-            hand_over(tools, replay, events, turn, request, Some((kind, note)));
+            // A turn cut short by a limit or a timeout is not a finished turn: its edits are dropped,
+            // because applying half a screen would leave a document nobody agreed to. The message says
+            // which limit stopped it.
+            drop(tools);
+            figcraft_agent::TurnTerminal::LimitReached { turn, kind, message }
         }
+    };
+    // The panel learns how it ended from the terminal event; the replay travels inside the success.
+    match &terminal {
+        figcraft_agent::TurnTerminal::Success { .. } => {
+            push_event(events, AgentEvent::Committed { turn, undo_label: figcraft_agent::shadow::undo_label(request) })
+        }
+        figcraft_agent::TurnTerminal::Failed { kind, message, .. } => {
+            push_event(events, AgentEvent::Failed { turn, kind: *kind, message: message.clone() })
+        }
+        figcraft_agent::TurnTerminal::Cancelled { .. } => push_event(events, AgentEvent::Cancelled { turn }),
+        figcraft_agent::TurnTerminal::LimitReached { kind, message, .. } => {
+            push_event(events, AgentEvent::Failed { turn, kind: *kind, message: message.clone() })
+        }
+    }
+    if let Ok(mut slot) = terminal_slot.lock() {
+        *slot = Some(terminal);
     }
 }
 
-/// Give a finished turn's edits to the UI thread, and report how it ended.
+/// Build the success terminal, moving the shadow's replay into the envelope.
 ///
-/// `stopped` says the turn hit a limit rather than answering: the edits still go, because a partial
-/// prototype is more use than an empty canvas, but the panel is told the turn was cut short. A turn
-/// with nothing to apply reports `Committed` with no replay, which the panel shows as done.
-fn hand_over(
+/// This is the only function that reads a shadow's replay for committing, and it is only called when
+/// the model answered.
+fn finish_success(
     tools: figcraft_agent::tools::ShadowTools,
-    replay: &std::sync::Arc<std::sync::Mutex<Option<Vec<Value>>>>,
-    events: &std::sync::Arc<std::sync::Mutex<Vec<AgentEvent>>>,
     turn: u64,
+    snapshot: &Snapshot,
     request: &str,
-    stopped: Option<(AgentErrorKind, String)>,
-) {
-    let steps = tools.into_shadow().map(|sh| sh.replay().to_vec()).unwrap_or_default();
-    if !steps.is_empty() {
-        let json: Vec<Value> = steps.iter().map(|s: &ReplayStep| serde_json::json!({"command": s.command, "params": s.params})).collect();
-        if let Ok(mut slot) = replay.lock() {
-            *slot = Some(json);
-        }
-    }
-    match stopped {
-        Some((kind, message)) => push_event(events, AgentEvent::Failed { turn, kind, message }),
-        None => push_event(events, AgentEvent::Committed { turn, undo_label: figcraft_agent::shadow::undo_label(request) }),
-    }
+    answer: String,
+) -> figcraft_agent::TurnTerminal {
+    let replay = tools.into_shadow().map(|sh| sh.replay().to_vec()).unwrap_or_default();
+    let commit = if replay.is_empty() {
+        None
+    } else {
+        Some(figcraft_agent::CommitEnvelope::new(turn, snapshot.uid, snapshot.revision, replay, figcraft_agent::shadow::undo_label(request)))
+    };
+    figcraft_agent::TurnTerminal::Success { turn, answer, commit }
 }
 
 /// The credential a turn may use, resolved from the environment by the name in the config.

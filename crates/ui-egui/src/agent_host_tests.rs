@@ -50,7 +50,7 @@ fn a_host_with_no_runtime_reports_a_readable_failure() {
     }
     assert!(events[0].is_terminal(), "and the turn is over");
     assert_eq!(host.status(), HostStatus::Idle);
-    assert!(host.take_replay().is_none(), "nothing to commit");
+    assert!(host.take_terminal().is_none(), "nothing to commit");
 }
 
 #[test]
@@ -125,7 +125,8 @@ fn the_desktop_worker_reports_an_unreachable_provider_and_commits_nothing() {
         }
         other => panic!("expected a failure, got {other:?}"),
     }
-    assert!(worker.take_replay().is_none(), "a failed turn commits nothing");
+    let terminal = worker.take_terminal();
+    assert!(terminal.as_ref().is_none_or(|t| t.commit().is_none()), "a failed turn commits nothing");
     worker.shutdown();
 }
 
@@ -146,22 +147,43 @@ fn a_turn_outcome_knows_whether_it_finished() {
     let mut outcome = TurnOutcome::default();
     assert!(!outcome.is_finished(), "an empty outcome has not finished");
     outcome.events.push(AgentEvent::Started { turn: 1 });
-    assert!(!outcome.is_finished(), "a started turn has not finished");
-    outcome.events.push(AgentEvent::TextDelta { turn: 1, text: "a".into() });
-    assert!(!outcome.is_finished());
-    outcome.events.push(AgentEvent::Committed { turn: 1, undo_label: "AI: x".into() });
-    assert!(outcome.is_finished());
-    assert!(matches!(outcome.terminal(), Some(AgentEvent::Committed { .. })));
+    assert!(!outcome.is_finished(), "progress events do not finish a turn");
+    outcome.terminal = Some(figcraft_agent::TurnTerminal::Cancelled { turn: 1 });
+    assert!(outcome.is_finished(), "a terminal value finishes it");
 }
 
 #[test]
-fn a_turn_outcome_reports_the_terminal_event_not_the_last() {
-    // The terminal event ends a turn; anything the host appends afterwards is ignored.
+fn only_a_successful_outcome_exposes_a_commit() {
+    // The whole point of the typed terminal: the host hands back one value, and a replay is reachable
+    // only from a success. A failure with edits is not representable, so no caller can apply one.
     let mut outcome = TurnOutcome::default();
-    outcome.events.push(AgentEvent::Started { turn: 1 });
-    outcome.events.push(AgentEvent::Cancelled { turn: 1 });
-    outcome.events.push(AgentEvent::TextDelta { turn: 1, text: "late".into() });
-    assert!(matches!(outcome.terminal(), Some(AgentEvent::Cancelled { .. })), "the terminal event wins");
+    for terminal in [
+        figcraft_agent::TurnTerminal::Failed { turn: 1, kind: AgentErrorKind::Protocol, message: "bad".into() },
+        figcraft_agent::TurnTerminal::Cancelled { turn: 1 },
+        figcraft_agent::TurnTerminal::LimitReached { turn: 1, kind: AgentErrorKind::Timeout, message: "slow".into() },
+    ] {
+        outcome.terminal = Some(terminal);
+        assert!(outcome.commit().is_none(), "an unsuccessful ending carries no envelope");
+    }
+
+    let envelope = figcraft_agent::CommitEnvelope::new(
+        1,
+        1,
+        1,
+        vec![figcraft_agent::shadow::ReplayStep { command: "node.create".into(), params: serde_json::json!({}) }],
+        "AI: x",
+    );
+    outcome.terminal = Some(figcraft_agent::TurnTerminal::Success { turn: 1, answer: "d".into(), commit: Some(envelope) });
+    assert!(outcome.commit().is_some(), "a success exposes its envelope");
+}
+
+#[test]
+fn a_success_without_edits_exposes_no_commit() {
+    // A read-only turn succeeds and changes nothing; there is no envelope to apply.
+    let outcome =
+        TurnOutcome { events: Vec::new(), terminal: Some(figcraft_agent::TurnTerminal::Success { turn: 1, answer: "looked".into(), commit: None }) };
+    assert!(outcome.is_finished());
+    assert!(outcome.commit().is_none());
 }
 
 #[test]
@@ -198,7 +220,8 @@ fn a_cancelled_turn_produces_one_cancelled_event_and_no_replay() {
             "a cancelled turn ends cancelled or failed, not committed: {terminal:?}"
         );
     }
-    assert!(worker.take_replay().is_none(), "a cancelled turn commits nothing");
+    let terminal = worker.take_terminal();
+    assert!(terminal.as_ref().is_none_or(|t| t.commit().is_none()), "a cancelled turn commits nothing");
     worker.shutdown();
 }
 

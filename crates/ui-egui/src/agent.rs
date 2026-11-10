@@ -1315,22 +1315,7 @@ pub fn perform_requests(app: &mut crate::FigApp) {
                     p.requirements_draft = None;
                 }
             }
-            Request::ExportRequirements { id } => match app.session.execute("requirements.exportMarkdown", &serde_json::json!({"id": id})) {
-                Ok(v) => {
-                    let note = v.get("markdown").and_then(|m| m.as_str()).map(|md| {
-                        let first = md.lines().next().unwrap_or("").to_string();
-                        format!("{} ({} bytes)", first, md.len())
-                    });
-                    if let Some(p) = app.ui.agent.as_mut() {
-                        p.export_note = note;
-                    }
-                }
-                Err(e) => {
-                    if let Some(p) = app.ui.agent.as_mut() {
-                        p.error = Some(format!("{e}"));
-                    }
-                }
-            },
+            Request::ExportRequirements { id } => export_markdown(app, &id),
             Request::Send { request } => start_turn(app, &request),
             Request::Retry => {
                 // Rerun the last request: the panel kept it in the run it is showing.
@@ -1407,4 +1392,72 @@ fn record_turn(transcript: &mut figcraft_agent::history::Transcript, panel: &Age
 fn continuation_for(app: &mut crate::FigApp) -> Vec<serde_json::Value> {
     let conversation = conversation_id_of(app);
     app.ui.agent_transcript.conversations.iter().find(|c| c.id == conversation).map(|c| c.continuation.clone()).unwrap_or_default()
+}
+
+/// Export a requirements document as a Markdown file, in full.
+///
+/// The panel used to show the Markdown's first line and byte count and drop the text, so there was
+/// nothing to open: an "Export" that produced no file. This writes the whole document through the
+/// platform's save dialog, or, where the platform has no paths, hands it over as a download. The
+/// filename comes from the document's title with the characters a filesystem rejects removed.
+fn export_markdown(app: &mut crate::FigApp, id: &str) {
+    let markdown = match app.session.execute("requirements.exportMarkdown", &serde_json::json!({"id": id})) {
+        Ok(v) => v.get("markdown").and_then(|m| m.as_str()).map(str::to_string),
+        Err(e) => {
+            if let Some(p) = app.ui.agent.as_mut() {
+                p.error = Some(format!("{e}"));
+            }
+            return;
+        }
+    };
+    let Some(markdown) = markdown else {
+        if let Some(p) = app.ui.agent.as_mut() {
+            p.error = Some("the requirements document could not be rendered".to_string());
+        }
+        return;
+    };
+
+    let name = match app.session.execute("requirements.get", &serde_json::json!({"id": id})) {
+        Ok(v) => v.get("document").and_then(|d| d.get("title")).and_then(|t| t.as_str()).unwrap_or("requirements").to_string(),
+        Err(_) => "requirements".to_string(),
+    };
+    let bytes = markdown.len();
+    let filename = markdown_filename(&name);
+    app.pick_save(crate::i18n::tr("Export requirements as Markdown"), &filename, &["md"], move |app, path| {
+        match figcraft_engine::file_access::write(&path, markdown.as_bytes()) {
+            Ok(()) => {
+                if let Some(p) = app.ui.agent.as_mut() {
+                    p.export_note = Some(format!("{} ({bytes} bytes)", path.display()));
+                    p.error = None;
+                }
+            }
+            Err(e) => {
+                if let Some(p) = app.ui.agent.as_mut() {
+                    // An export that failed says so, and leaves the document alone.
+                    p.error = Some(format!("the Markdown could not be written: {e}"));
+                }
+            }
+        }
+    });
+}
+
+/// A filesystem-safe `.md` name from a title.
+///
+/// Characters that a path rejects (`/`, `\`, `:`, `*`, `?`, `"`, `<`, `>`, `|`) and control
+/// characters become `-`, runs collapse, and the result is bounded so a long title cannot exceed a
+/// filename limit. An empty result falls back to `requirements`.
+pub fn markdown_filename(title: &str) -> String {
+    const MAX: usize = 80;
+    let mut out = String::new();
+    for ch in title.chars() {
+        if ch.is_control() || matches!(ch, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') {
+            if !out.ends_with('-') {
+                out.push('-');
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+    let trimmed: String = out.trim_matches(|c: char| c == '-' || c.is_whitespace()).chars().take(MAX).collect();
+    if trimmed.is_empty() { "requirements.md".to_string() } else { format!("{trimmed}.md") }
 }

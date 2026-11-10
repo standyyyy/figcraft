@@ -812,3 +812,76 @@ fn a_turn_that_was_running_when_saved_reopens_as_interrupted() {
     assert_eq!(panel.current.as_ref().map(|r| r.request.as_str()), Some("an unfinished request"), "the request is shown");
     assert_eq!(panel.current.as_ref().and_then(|r| r.outcome), None, "and it has no outcome");
 }
+
+// ---------- Markdown export writes the whole document ----------
+
+#[test]
+fn a_markdown_filename_is_safe_and_ends_in_md() {
+    // The name comes from a document title a person or a model wrote, so it can hold anything a path
+    // rejects, including path separators.
+    assert_eq!(crate::agent::markdown_filename("Checkout flow"), "Checkout flow.md");
+    assert_eq!(crate::agent::markdown_filename("a/b:c*d?e\"f<g>h|i"), "a-b-c-d-e-f-g-h-i.md");
+    assert_eq!(crate::agent::markdown_filename("../../etc/passwd"), "..-..-etc-passwd.md");
+    assert_eq!(crate::agent::markdown_filename(""), "requirements.md");
+    assert_eq!(crate::agent::markdown_filename("   "), "requirements.md");
+    assert_eq!(crate::agent::markdown_filename("---"), "requirements.md");
+    // A very long title is bounded.
+    let long = "x".repeat(500);
+    let name = crate::agent::markdown_filename(&long);
+    assert!(name.len() <= 84, "bounded: {}", name.len());
+    assert!(name.ends_with(".md"));
+}
+
+#[test]
+fn a_markdown_filename_keeps_non_ascii() {
+    // A Chinese title is a perfectly good filename; only what a path rejects is replaced.
+    let name = crate::agent::markdown_filename("企业微信侧边栏需求");
+    assert_eq!(name, "企业微信侧边栏需求.md");
+}
+
+#[test]
+fn the_exported_markdown_is_the_whole_document() {
+    // The engine renders it; this asserts the contract the UI depends on, that the Markdown has every
+    // section rather than the first line the panel used to show.
+    let mut app = harness_with(true);
+    let created = app
+        .session
+        .execute(
+            "requirements.upsert",
+            &serde_json::json!({
+                "title": "Checkout",
+                "summary": "A checkout flow",
+                "goals": ["One screen", "Fast"],
+                "requirements": [
+                    {"title": "Cart", "detail": "Shows the items", "priority": "must"},
+                    {"title": "Pay", "detail": "Takes the card", "priority": "should"},
+                ],
+                "acceptanceCriteria": ["The cart shows every item", "Payment confirms"],
+            }),
+        )
+        .expect("create the document");
+    let id = created["id"].as_str().expect("an id").to_string();
+
+    let rendered = app.session.execute("requirements.exportMarkdown", &serde_json::json!({"id": id})).expect("render");
+    let markdown = rendered["markdown"].as_str().expect("markdown");
+    for expected in
+        ["# Checkout", "A checkout flow", "One screen", "Fast", "Cart", "Shows the items", "Pay", "The cart shows every item", "Payment confirms"]
+    {
+        assert!(markdown.contains(expected), "the Markdown holds `{expected}`: {markdown}");
+    }
+    assert!(markdown.lines().count() > 5, "it is a document, not a preview line: {markdown}");
+    assert_eq!(rendered["bytes"].as_u64(), Some(markdown.len() as u64), "the byte count is the whole text");
+}
+
+#[test]
+fn an_export_request_for_a_missing_document_reports_an_error_and_changes_nothing() {
+    // An export that cannot render says so; it must not touch the document or the undo history.
+    let mut app = harness_with(true);
+    let depth = app.session.undo_depth();
+    let layers = app.session.doc().expect("doc").nodes().count();
+    if let Ok(v) = app.session.execute("requirements.exportMarkdown", &serde_json::json!({"id": "PRD:missing"})) {
+        panic!("a missing document must not render: {v}");
+    }
+    assert_eq!(app.session.undo_depth(), depth, "no undo entry");
+    assert_eq!(app.session.doc().expect("doc").nodes().count(), layers, "no document change");
+}

@@ -482,6 +482,12 @@ pub struct UiState {
     /// Present on every platform so the panel has one shape; only the browser writes to it, because
     /// only the browser has no environment to read. It is never serialized.
     pub agent_credentials: agent_credentials::AgentCredentials,
+    /// What the last connection test is doing; survives frames because the result arrives later.
+    pub agent_connection: agent::AgentConnectionState,
+    /// The id of the newest connection test, so an older result is discarded.
+    pub agent_connection_request: u64,
+    /// The token that stops a running connection test.
+    pub agent_connection_cancel: Option<figcraft_agent::run::CancelToken>,
     /// Requests the Agent panel produced this frame, for the app to perform after the draw.
     pub agent_requests: Vec<agent::Request>,
     /// The platform's way to run a turn. `None` until the app sets one, so a build without a runtime
@@ -705,6 +711,9 @@ impl Default for UiState {
             agent_transcript: figcraft_agent::history::Transcript::default(),
             agent_transcript_uid: None,
             agent_credentials: agent_credentials::AgentCredentials::default(),
+            agent_connection: agent::AgentConnectionState::default(),
+            agent_connection_request: 0,
+            agent_connection_cancel: None,
             agent_requests: Vec::new(),
             agent_host: None,
             agent_turn: 0,

@@ -527,6 +527,53 @@ use crate::theme::Tokens;
 use crate::widgets;
 use egui::{Align, Align2, CornerRadius, Id, Layout, Rect, Sense, Stroke, Ui, Vec2, pos2, vec2};
 
+/// What a connection test is doing, kept across frames.
+///
+/// Persisted rather than a local: the test runs on a thread, so its result arrives on a later frame
+/// than the click that started it. A local would be gone by then, and the button would appear to do
+/// nothing.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum AgentConnectionState {
+    /// Nothing tested since the settings last changed.
+    #[default]
+    Idle,
+    /// A test is running; the button is disabled so it cannot be started twice.
+    Testing,
+    /// The provider answered.
+    Ready,
+    /// It did not, and this is why.
+    Failed(String),
+    /// The person stopped it.
+    Cancelled,
+}
+
+impl AgentConnectionState {
+    /// From what the host reported.
+    pub fn from_status(status: figcraft_agent::runtime::ConnectionStatus) -> Self {
+        match status {
+            figcraft_agent::runtime::ConnectionStatus::Ready => Self::Ready,
+            figcraft_agent::runtime::ConnectionStatus::Failed(why) => Self::Failed(why),
+            figcraft_agent::runtime::ConnectionStatus::Cancelled => Self::Cancelled,
+        }
+    }
+
+    /// What to show beside the button, if anything.
+    pub fn message(&self) -> Option<String> {
+        match self {
+            Self::Idle => None,
+            Self::Testing => Some(crate::i18n::tr("Testing…").to_string()),
+            Self::Ready => Some(crate::i18n::tr("The provider answered.").to_string()),
+            Self::Failed(why) => Some(why.clone()),
+            Self::Cancelled => Some(crate::i18n::tr("The test was stopped.").to_string()),
+        }
+    }
+
+    /// Whether a test is running.
+    pub fn is_testing(&self) -> bool {
+        matches!(self, Self::Testing)
+    }
+}
+
 /// The panel's own width, so it can sit beside the canvas like the other panels.
 pub const AGENT_PANEL_WIDTH: f32 = 320.0;
 /// The narrowest the panel is drawn: below this, controls would overlap.
@@ -1118,7 +1165,21 @@ pub fn poll_host(app: &mut crate::FigApp) {
                 }
             }
             crate::agent_host::HostMessage::Terminal(terminal) => settle_turn(app, &terminal),
+            crate::agent_host::HostMessage::ConnectionFinished { request, status } => {
+                apply_connection_result(app, request, status);
+            }
         }
+    }
+}
+
+/// Settle the panel from a connection test's result, if it is the one being waited for.
+///
+/// Split out so the rule has one home: an older test's answer must not settle a newer one, because
+/// the settings it tested may already have been edited.
+pub fn apply_connection_result(app: &mut crate::FigApp, request: u64, status: figcraft_agent::runtime::ConnectionStatus) {
+    if request == app.ui.agent_connection_request {
+        app.ui.agent_connection = AgentConnectionState::from_status(status);
+        app.ui.agent_connection_cancel = None;
     }
 }
 

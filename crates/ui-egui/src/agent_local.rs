@@ -115,6 +115,24 @@ impl AgentHost for LocalFutureHost {
         }
     }
 
+    fn start_connection_test(&mut self, request: u64, config: figcraft_agent::AgentConfig) -> CancelToken {
+        // A local future on the page's event loop, like a turn: awaiting a provider inside the draw
+        // would freeze the window, and a page has only the one thread.
+        let cancel = CancelToken::new();
+        let token = cancel.clone();
+        let shared = Rc::clone(&self.shared);
+        let credentials = self.credentials.clone();
+        let wake = shared.try_borrow().ok().and_then(|s| s.wake.clone());
+        wasm_bindgen_futures::spawn_local(async move {
+            let status = figcraft_agent::runtime::test_connection_async_cancellable(&config, &credentials, &token).await;
+            push(&shared, HostMessage::ConnectionFinished { request, status });
+            if let Some(ctx) = wake {
+                ctx.request_repaint();
+            }
+        });
+        cancel
+    }
+
     /// Keep the app's context, so a queued message repaints without waiting for input.
     fn set_wake(&mut self, ctx: egui::Context) {
         if let Ok(mut s) = self.shared.try_borrow_mut() {

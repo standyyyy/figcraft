@@ -75,6 +75,8 @@ impl std::fmt::Debug for WorkerHost {
 
 /// The name the worker thread is given, so a hang can be found in a debugger.
 pub const WORKER_NAME: &str = "figcraft-agent";
+/// The name a connection test's thread is given.
+pub const CONNECTION_TEST_THREAD: &str = "figcraft-agent-connection";
 
 impl WorkerHost {
     /// A host with no thread yet: one starts at the first turn.
@@ -190,6 +192,29 @@ impl AgentHost for WorkerHost {
 
     fn status(&self) -> HostStatus {
         if self.running { HostStatus::Running } else { HostStatus::Idle }
+    }
+
+    fn start_connection_test(&mut self, request: u64, config: figcraft_agent::AgentConfig) -> CancelToken {
+        // A thread of its own, so the wait never touches the drawing thread. Named, so a hang is
+        // findable in a debugger, and detached: the result arrives through the queue, and a test that
+        // outlives the window is harmless.
+        let cancel = CancelToken::new();
+        let queue = Arc::clone(&self.queue);
+        let wake = self.wake.clone();
+        let token = cancel.clone();
+        let spawned = std::thread::Builder::new().name(CONNECTION_TEST_THREAD.into()).spawn(move || {
+            let credentials = figcraft_agent::EnvironmentCredentials;
+            let status = figcraft_agent::runtime::test_connection_blocking(&config, &credentials, &token);
+            enqueue_message(&queue, wake.as_ref(), HostMessage::ConnectionFinished { request, status });
+        });
+        if spawned.is_err() {
+            // No thread: say so rather than leaving the button spinning forever.
+            self.enqueue(HostMessage::ConnectionFinished {
+                request,
+                status: figcraft_agent::runtime::ConnectionStatus::Failed("the test could not be started".into()),
+            });
+        }
+        cancel
     }
 
     /// Keep the app's context, so a queued message repaints without waiting for input.

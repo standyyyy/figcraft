@@ -127,6 +127,15 @@ impl AgentConfig {
     pub fn timeout_seconds(&self) -> u32 {
         self.timeout_seconds
     }
+
+    /// The same config with a shorter timeout, for a test that must not wait the real one.
+    ///
+    /// Not `#[cfg(test)]`: the live tests and other crates' tests use it too, and a two-second
+    /// timeout is a legitimate configuration.
+    pub fn with_timeout_seconds(mut self, seconds: u32) -> Self {
+        self.timeout_seconds = seconds;
+        self
+    }
 }
 
 impl std::fmt::Debug for AgentConfig {

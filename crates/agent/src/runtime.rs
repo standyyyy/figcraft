@@ -611,6 +611,10 @@ pub enum ConnectionStatus {
     Ready,
     /// It did not, and this is why.
     Failed(String),
+    /// The person closed the settings or pressed Stop before it answered.
+    ///
+    /// Distinct from a failure: the endpoint has not been shown to be broken.
+    Cancelled,
 }
 
 impl ConnectionStatus {
@@ -619,8 +623,82 @@ impl ConnectionStatus {
         match self {
             ConnectionStatus::Ready => "The provider answered.",
             ConnectionStatus::Failed(why) => why,
+            ConnectionStatus::Cancelled => "The test was stopped.",
         }
     }
+}
+
+/// Test the endpoint without blocking, bounded by the configured timeout and by `cancel`.
+///
+/// This is the path a UI should use: the blocking [`check_connection`] parks the thread it runs on,
+/// and when that thread is the one drawing the window, a silent provider freezes the app.
+///
+/// The wait races the same three things a turn does -- the provider answering, cancellation, and the
+/// configured timeout -- so it always ends.
+pub async fn test_connection_async_cancellable(
+    config: &AgentConfig,
+    credentials: &dyn crate::Credentials,
+    cancel: &crate::run::CancelToken,
+) -> ConnectionStatus {
+    let credential = match credentials.resolve(config.credential()) {
+        Ok(c) => c,
+        Err(e) => return ConnectionStatus::Failed(e.message),
+    };
+    if credential.is_none() && config.credential().is_some() {
+        let name = config.credential().unwrap_or_default();
+        return ConnectionStatus::Failed(format!("no credential named `{name}` is set"));
+    }
+
+    let openai = OpenAIConfig::new(credential.as_ref().map_or("", crate::Secret::expose)).with_base_url(config.base_url());
+    let model = openai.client().chat(config.model().to_string());
+    // No tools and one turn: this can only fail if the endpoint, the key or the model is wrong.
+    let agent = AgentBuilder::new(model).preamble("Reply with the single word: ready").build();
+    let mut stream = agent.prompt("ready?").max_turns(1).stream();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(u64::from(config.timeout_seconds()));
+
+    let bounded = async {
+        loop {
+            let next = stream.next();
+            let wait_for_cancel = cancel.cancelled();
+            let wait_for_deadline = deadline_at(deadline);
+            futures::pin_mut!(next, wait_for_cancel, wait_for_deadline);
+            match futures::future::select(futures::future::select(next, wait_for_cancel), wait_for_deadline).await {
+                Either::Left((Either::Left((item, _)), _)) => match item {
+                    // The first text proves the endpoint, the key and the model.
+                    Some(Ok(MultiTurnStreamItem::StreamAssistantItem(rig_core::streaming::Item::Event(StreamEvent::Text { .. })))) => {
+                        return ConnectionStatus::Ready;
+                    }
+                    Some(Ok(MultiTurnStreamItem::FinalResponse(_))) => return ConnectionStatus::Ready,
+                    Some(Ok(_)) => {}
+                    Some(Err(e)) => {
+                        let message = e.to_string();
+                        let kind = classify(&message);
+                        return ConnectionStatus::Failed(crate::ProviderError::new(kind, summarize(&message)).message);
+                    }
+                    None => return ConnectionStatus::Ready,
+                },
+                Either::Left((Either::Right(((), _)), _)) => return ConnectionStatus::Cancelled,
+                Either::Right(((), _)) => {
+                    return ConnectionStatus::Failed(format!("the provider did not answer within {} seconds", config.timeout_seconds()));
+                }
+            }
+        }
+    };
+    // The outer bound is belt and braces: every arm above ends, and this keeps a future misbehaving
+    // inside Rig from hanging the caller.
+    bounded.await
+}
+
+/// The cancellable test, blocking, for a caller on a thread it may park (a worker, not a draw).
+///
+/// Lives here so a UI host needs no futures dependency of its own: it spawns a thread and calls this.
+pub fn test_connection_blocking(config: &AgentConfig, credentials: &dyn crate::Credentials, cancel: &crate::run::CancelToken) -> ConnectionStatus {
+    futures::executor::block_on(test_connection_async_cancellable(config, credentials, cancel))
+}
+
+/// [`test_connection_async_cancellable`] with a token nobody holds, for a caller with no Stop.
+pub async fn test_connection_async(config: &AgentConfig, credentials: &dyn crate::Credentials) -> ConnectionStatus {
+    test_connection_async_cancellable(config, credentials, &crate::run::CancelToken::new()).await
 }
 
 /// Run [`test_connection`] and turn its result into something to show.

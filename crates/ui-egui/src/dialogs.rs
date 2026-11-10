@@ -284,7 +284,6 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
             ui.add_space(6.0);
             crate::widgets::label(ui, tr("Agent"), t.text);
             let agent = prefs.agent.clone();
-            let mut connection: Option<String> = None;
             if crate::widgets::checkbox(ui, agent.enabled, tr("Enable the in-app Agent")) {
                 app.run("pref.agent", json!({"enabled": !agent.enabled}));
             }
@@ -361,16 +360,28 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
                 app.run("pref.agent", provider);
             }
             // Test the endpoint without running a turn: no shadow, no tools, no document change.
+            //
+            // The test runs on the host, not here: awaiting a provider inside the draw freezes the
+            // window for as long as the provider is silent, which is exactly when a person is most
+            // likely to be pressing this button. The result arrives on a later frame, through the same
+            // queue as everything else.
             if agent.enabled {
+                let testing = app.ui.agent_connection.is_testing();
                 ui.horizontal(|ui| {
                     let label = crate::i18n::tr("Test connection");
-                    if crate::widgets::button(ui, label, false, !agent.base_url.trim().is_empty()).clicked()
+                    // Disabled while testing, so a second click cannot start a second request.
+                    let enabled = !testing && !agent.base_url.trim().is_empty();
+                    if crate::widgets::button(ui, label, false, enabled).clicked()
                         && let Ok(config) = figcraft_agent::AgentConfig::from_prefs(&agent)
+                        && let Some(host) = app.ui.agent_host.as_mut()
                     {
-                        let status = figcraft_agent::runtime::check_connection(&config, &figcraft_agent::EnvironmentCredentials);
-                        connection = Some(status.message().to_string());
+                        app.ui.agent_connection_request = app.ui.agent_connection_request.wrapping_add(1);
+                        let request = app.ui.agent_connection_request;
+                        app.ui.agent_connection = crate::agent::AgentConnectionState::Testing;
+                        let token = host.start_connection_test(request, config);
+                        app.ui.agent_connection_cancel = Some(token);
                     }
-                    if let Some(note) = &connection {
+                    if let Some(note) = app.ui.agent_connection.message() {
                         ui.label(note);
                     }
                 });

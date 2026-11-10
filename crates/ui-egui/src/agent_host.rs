@@ -102,14 +102,22 @@ pub enum HostMessage {
     Progress(AgentEvent),
     /// How the turn ended. Always the last message of its turn.
     Terminal(TurnTerminal),
+    /// A connection test finished.
+    ///
+    /// Carries the request's id so a result that arrives after Preferences closed, or after a newer
+    /// test started, is discarded: showing a stale "ready" for an endpoint the person has since
+    /// edited would be worse than showing nothing.
+    ConnectionFinished { request: u64, status: figcraft_agent::runtime::ConnectionStatus },
 }
 
 impl HostMessage {
-    /// The turn this message belongs to.
+    /// The turn this message belongs to, or 0 for a message that is not about a turn.
     pub fn turn(&self) -> u64 {
         match self {
             HostMessage::Progress(e) => e.turn(),
             HostMessage::Terminal(t) => t.turn(),
+            // A connection test is not a turn: it has a request id instead.
+            HostMessage::ConnectionFinished { .. } => 0,
         }
     }
 
@@ -142,6 +150,27 @@ pub trait AgentHost {
     /// Stays `Running` until the terminal message has been **drained**, not merely produced: while the
     /// ending is still queued the turn is not yet finished from the UI's point of view.
     fn status(&self) -> HostStatus;
+
+    /// Begin a connection test, performed off the drawing thread.
+    ///
+    /// A settings check, not a turn: it builds no shadow, registers no tools and changes no document.
+    /// The result arrives as [`HostMessage::ConnectionFinished`], so the window keeps repainting while
+    /// the provider is asked.
+    ///
+    /// Returns the token that stops this test, so closing Preferences can abandon it.
+    fn start_connection_test(&mut self, request: u64, config: figcraft_agent::AgentConfig) -> CancelToken {
+        // A host with no runtime says so instead of leaving the button spinning.
+        let _ = config;
+        self.queue_connection_failure(request);
+        CancelToken::new()
+    }
+
+    /// Report a connection test that could not start, through the same queue as any other result.
+    ///
+    /// A host that cannot run the test at all still has to settle the UI's persistent state.
+    fn queue_connection_failure(&mut self, request: u64) {
+        let _ = request;
+    }
 
     /// The egui context to wake whenever a message is queued.
     ///

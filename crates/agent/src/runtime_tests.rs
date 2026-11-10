@@ -217,6 +217,7 @@ fn a_connection_test_against_an_unreachable_provider_fails_with_the_cause() {
             println!("connection test failed with: {why}");
         }
         crate::runtime::ConnectionStatus::Ready => panic!("nothing listens on port 1"),
+        crate::runtime::ConnectionStatus::Cancelled => panic!("nobody cancelled this test"),
     }
 }
 
@@ -239,6 +240,7 @@ fn a_connection_test_with_a_missing_credential_says_so_without_a_request() {
             assert!(why.contains("FIGCRAFT_DEFINITELY_NOT_SET_XYZ"), "and it names the variable: {why}");
         }
         crate::runtime::ConnectionStatus::Ready => panic!("a missing key is not ready"),
+        crate::runtime::ConnectionStatus::Cancelled => panic!("nobody cancelled this test"),
     }
 }
 
@@ -371,5 +373,76 @@ impl Drop for SilentServer {
         if let Some(h) = self.handle.take() {
             let _ = h.join();
         }
+    }
+}
+
+// ---------- the connection test is a request, not a blocking call ----------
+
+#[test]
+fn a_connection_test_against_a_silent_provider_times_out() {
+    // The blocking `check_connection` waits for as long as the provider stays silent. The async path
+    // must end at the configured timeout instead: a settings check that hangs is worse than one that
+    // fails, because the window it is drawn in stops repainting.
+    let Some(server) = SilentServer::start() else {
+        eprintln!("skipped: no loopback listener available");
+        return;
+    };
+    let mut config = server.config();
+    config = config.with_timeout_seconds(1);
+
+    let started = std::time::Instant::now();
+    let status = futures::executor::block_on(crate::runtime::test_connection_async(&config, &crate::EnvironmentCredentials));
+    let elapsed = started.elapsed();
+    assert!(elapsed < std::time::Duration::from_secs(20), "it ended on its own: {elapsed:?}");
+    match status {
+        crate::runtime::ConnectionStatus::Failed(why) => {
+            let why = why.to_lowercase();
+            assert!(why.contains("time") || why.contains("reach") || why.contains("answer"), "a readable cause: {why}");
+        }
+        crate::runtime::ConnectionStatus::Ready => panic!("a silent provider is not ready"),
+        crate::runtime::ConnectionStatus::Cancelled => panic!("nobody cancelled this test"),
+    }
+}
+
+#[test]
+fn a_cancelled_connection_test_reports_cancelled_rather_than_failing() {
+    // Closing Preferences while a test runs must stop it, and the result must say so rather than
+    // claiming the endpoint is broken.
+    let Some(server) = SilentServer::start() else {
+        eprintln!("skipped: no loopback listener available");
+        return;
+    };
+    let config = server.config();
+    let cancel = CancelToken::new();
+    let from_elsewhere = cancel.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        from_elsewhere.cancel();
+    });
+
+    let started = std::time::Instant::now();
+    let status = futures::executor::block_on(crate::runtime::test_connection_async_cancellable(&config, &crate::EnvironmentCredentials, &cancel));
+    assert!(started.elapsed() < std::time::Duration::from_secs(5), "the wait was broken promptly");
+    assert!(matches!(status, crate::runtime::ConnectionStatus::Cancelled), "got {status:?}");
+}
+
+#[test]
+fn a_connection_test_that_cannot_build_a_config_says_so_without_a_request() {
+    // A missing key is caught before any I/O: the message names what to fix.
+    let prefs = figcraft_engine::prefs::AgentPrefs {
+        enabled: true,
+        base_url: "http://127.0.0.1:1".into(),
+        model: "m".into(),
+        credential: Some("FIGCRAFT_DEFINITELY_NOT_SET_ABC".into()),
+        timeout_seconds: 10,
+        ..figcraft_engine::prefs::AgentPrefs::default()
+    };
+    let config = AgentConfig::from_prefs(&prefs).expect("valid");
+    let status = futures::executor::block_on(crate::runtime::test_connection_async(&config, &crate::EnvironmentCredentials));
+    match status {
+        crate::runtime::ConnectionStatus::Failed(why) => {
+            assert!(why.contains("credential"), "the cause is the missing key: {why}");
+        }
+        other => panic!("expected a failure, got {other:?}"),
     }
 }

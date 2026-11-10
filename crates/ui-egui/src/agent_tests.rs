@@ -970,3 +970,53 @@ fn a_test_of_the_settings_never_touches_the_document() {
     assert_eq!(app.session.undo_depth(), depth, "no undo entry");
     assert_eq!(app.session.doc().expect("doc").nodes().count(), layers, "no document change");
 }
+
+// ---------- the connection test is a request, not a blocking call ----------
+
+#[test]
+fn a_test_in_flight_disables_the_button_so_it_cannot_start_twice() {
+    // Clicking twice used to start two requests. The persistent state is what prevents it: the button
+    // is drawn from it, and a second click finds it enabled only when nothing is running.
+    let mut state = crate::agent::AgentConnectionState::default();
+    assert!(!state.is_testing(), "nothing tested yet");
+    assert!(state.message().is_none(), "and nothing to show");
+
+    state = crate::agent::AgentConnectionState::Testing;
+    assert!(state.is_testing(), "a test in flight says so");
+    assert!(state.message().is_some(), "and shows that it is working");
+}
+
+#[test]
+fn each_result_kind_has_something_to_show() {
+    use crate::agent::AgentConnectionState;
+    // Every ending is visible: a silent no-op is what makes a person press the button again.
+    for state in [
+        AgentConnectionState::Testing,
+        AgentConnectionState::Ready,
+        AgentConnectionState::Failed("the provider refused the key".into()),
+        AgentConnectionState::Cancelled,
+    ] {
+        assert!(state.message().is_some(), "{state:?} must say something");
+    }
+    let failed = AgentConnectionState::from_status(figcraft_agent::runtime::ConnectionStatus::Failed("nope".into()));
+    assert_eq!(failed.message().as_deref(), Some("nope"), "a failure shows its cause");
+    let cancelled = AgentConnectionState::from_status(figcraft_agent::runtime::ConnectionStatus::Cancelled);
+    assert!(!cancelled.is_testing(), "a stopped test is not still running");
+}
+
+#[test]
+fn a_result_from_an_older_test_is_discarded() {
+    // A test whose result arrives after the panel moved on must not settle the newer one: showing
+    // "ready" for an endpoint the person has since edited would be worse than showing nothing.
+    let mut app = harness_with(true);
+    app.ui.agent_connection_request = 7;
+    app.ui.agent_connection = crate::agent::AgentConnectionState::Testing;
+
+    // A result for request 3 arrives.
+    crate::agent::apply_connection_result(&mut app, 3, figcraft_agent::runtime::ConnectionStatus::Ready);
+    assert_eq!(app.ui.agent_connection, crate::agent::AgentConnectionState::Testing, "the stale result changed nothing");
+
+    // The one it is waiting for.
+    crate::agent::apply_connection_result(&mut app, 7, figcraft_agent::runtime::ConnectionStatus::Ready);
+    assert_eq!(app.ui.agent_connection, crate::agent::AgentConnectionState::Ready);
+}

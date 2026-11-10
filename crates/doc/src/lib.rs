@@ -20,6 +20,7 @@ pub mod library;
 pub mod node;
 pub mod props;
 pub mod proto;
+pub mod requirements;
 pub mod styles;
 pub mod text;
 pub mod vector;
@@ -35,6 +36,7 @@ pub use figcraft_color as color;
 pub use figcraft_geom as geom;
 pub use handoff::*;
 pub use library::*;
+pub use requirements::*;
 pub use node::*;
 pub use props::*;
 pub use styles::*;
@@ -217,6 +219,13 @@ pub struct Document {
     /// Comment threads on any page.
     #[serde(default)]
     pub comments: Vec<Comment>,
+    /// Structured requirements documents embedded in this file.
+    ///
+    /// Ordinary document data: they save and reopen with the file, take part in undo, sync in a
+    /// live session and appear in branches and version history. Empty requirements are not written,
+    /// so a file without any stays byte-compatible with readers from before this field existed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requirements: Vec<RequirementsDocument>,
     /// Enabled libraries and the components and styles copied from them.
     #[serde(default, skip_serializing_if = "Libraries::is_unused")]
     pub libraries: Arc<Libraries>,
@@ -281,6 +290,7 @@ impl Document {
             current_page: None,
             document_colors: Vec::new(),
             comments: Vec::new(),
+            requirements: Vec::new(),
             libraries: Arc::default(),
             published: None,
             color_profile: ColorProfile::Srgb,
@@ -1331,6 +1341,8 @@ mod effects_tests;
 mod guides_tests;
 #[cfg(test)]
 mod handoff_tests;
+#[cfg(test)]
+mod requirements_tests;
 #[cfg(test)]
 mod ids_tests;
 #[cfg(test)]

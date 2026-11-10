@@ -104,6 +104,7 @@ impl fmt::Display for Key {
                 Entry::DevSnapshot(k) => write!(f, "devSnapshot/{k}"),
                 Entry::Image(k) => write!(f, "image/{k}"),
                 Entry::Ballot(k) => write!(f, "ballot/{k}"),
+                Entry::Requirements(k) => write!(f, "requirements/{k}"),
             },
         }
     }

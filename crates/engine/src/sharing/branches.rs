@@ -585,10 +585,11 @@ fn entry_label(plan: &Plan, entry: &Entry, value: Option<&Value>) -> Option<(&'s
         Entry::Variable(_) => "variable",
         Entry::Collection(_) => "variable collection",
         Entry::Comment(_) => "comment",
+        Entry::Requirements(_) => "requirements document",
         Entry::DevSnapshot(_) | Entry::Image(_) | Entry::Ballot(_) => return None,
     };
     let base = plan.base().value(&Target::Entry(entry.clone())).ok().flatten();
-    let named = value.or(base.as_ref().map(|j| &j.0)).and_then(|v| v.get("name").or_else(|| v.get("text"))).and_then(Value::as_str);
+    let named = value.or(base.as_ref().map(|j| &j.0)).and_then(|v| v.get("name").or_else(|| v.get("text")).or_else(|| v.get("title"))).and_then(Value::as_str);
     Some((kind, figcraft_format::clip(named.unwrap_or_default(), 60)))
 }
 

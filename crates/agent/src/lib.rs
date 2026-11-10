@@ -12,10 +12,20 @@
 
 pub mod config;
 pub mod gateway;
+pub mod shadow;
+pub mod tools;
 
 #[cfg(test)]
 #[path = "gateway_tests.rs"]
 mod gateway_tests;
+
+#[cfg(test)]
+#[path = "shadow_tests.rs"]
+mod shadow_tests;
+
+#[cfg(test)]
+#[path = "tools_tests.rs"]
+mod tools_tests;
 
 pub use config::{AgentConfig, ConfigError, Route};
 pub use gateway::{Credentials, Environment, ModelGateway, ProviderError};

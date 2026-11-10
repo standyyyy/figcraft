@@ -16,6 +16,8 @@ pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
 
 pub mod a11y;
 pub mod agent;
+pub mod agent_host;
+pub mod agent_worker;
 pub mod bidi;
 pub mod canvas;
 pub mod cjk;
@@ -50,6 +52,8 @@ mod theme_startup_tests;
 
 #[cfg(test)]
 mod a11y_tests;
+#[cfg(test)]
+mod agent_host_tests;
 #[cfg(test)]
 mod agent_tests;
 #[cfg(test)]

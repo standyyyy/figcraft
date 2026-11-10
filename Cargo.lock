@@ -2172,6 +2172,7 @@ dependencies = [
  "egui",
  "egui_extras",
  "figcraft-agent",
+ "figcraft-agent-tools",
  "figcraft-color",
  "figcraft-doc",
  "figcraft-engine",

@@ -87,6 +87,7 @@ fn same_layer_ok(from: &str, to: &str) -> bool {
             | ("figcraft-agent", "figcraft-agent-tools")
             | ("figcraft-ui-egui", "figcraft-agent")
             | ("figcraft-mcp", "figcraft-agent-tools")
+            | ("figcraft-ui-egui", "figcraft-agent-tools")
     )
 }
 
@@ -108,6 +109,8 @@ mod tests {
             ("figcraft-agent", "figcraft-agent-tools"),
             ("figcraft-ui-egui", "figcraft-agent"),
             ("figcraft-mcp", "figcraft-agent-tools"),
+            // The Agent panel names the embedded policy when it builds a shadow's tool set.
+            ("figcraft-ui-egui", "figcraft-agent-tools"),
         ];
         for (from, to) in permitted {
             assert!(same_layer_ok(from, to), "{from} -> {to} should be permitted");

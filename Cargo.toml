@@ -76,7 +76,13 @@ thiserror = "2"
 # Command-line parsing for figcraft-cli (craft-contrib RFC-0012: clap derive, as photocraft does).
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive", "rc"] }
-serde_json = { version = "1", features = ["float_roundtrip"] }
+# `preserve_order` is declared here, not left to a dependency, because Rig enables it
+# unconditionally: without this line a build of one crate keeps `BTreeMap` and sorts object keys,
+# while a workspace build (which pulls rig-core in) keeps insertion order. The inspect output is a
+# public contract -- MCP clients, the Agent and the control channel read it -- so it must not depend
+# on which crates happen to be in the graph. Declaring it makes every build use `IndexMap` and lets
+# `inspect` define its own field order (see `crates/engine/src/automation/inspect.rs`).
+serde_json = { version = "1", features = ["float_roundtrip", "preserve_order"] }
 regex = "1.13"
 log = "0.4"
 same-file = "1.0.6"

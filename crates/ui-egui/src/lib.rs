@@ -471,6 +471,8 @@ pub struct UiState {
     pub agent_configured: bool,
     /// The Agent's transcript for this file, read from the file and written back on save.
     pub agent_transcript: figcraft_agent::history::Transcript,
+    /// The file `agent_transcript` was read from, so a tab switch reloads it and a frame does not.
+    pub agent_transcript_uid: Option<u64>,
     /// Requests the Agent panel produced this frame, for the app to perform after the draw.
     pub agent_requests: Vec<agent::Request>,
     /// The platform's way to run a turn. `None` until the app sets one, so a build without a runtime
@@ -692,6 +694,7 @@ impl Default for UiState {
             agent_running: agent::Running::default(),
             agent_configured: false,
             agent_transcript: figcraft_agent::history::Transcript::default(),
+            agent_transcript_uid: None,
             agent_requests: Vec::new(),
             agent_host: None,
             agent_turn: 0,

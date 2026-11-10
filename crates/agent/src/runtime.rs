@@ -172,11 +172,21 @@ fn finish_success(turn: u64, uid: u64, revision: u64, tools: ShadowTools, reques
 /// request.
 fn classify(message: &str) -> AgentErrorKind {
     let m = message.to_lowercase();
-    if m.contains("401") || m.contains("403") || m.contains("unauthor") || m.contains("auth") {
+    // Rig wraps transport failures as `HttpError: Http client error: error sending request for url
+    // (...)`; a refused connection, a bad host and a DNS failure all read that way, and the message a
+    // person can act on is "the provider could not be reached".
+    if m.contains("401") || m.contains("403") || m.contains("unauthor") || m.contains("invalid api key") || m.contains("auth") {
         AgentErrorKind::Authentication
-    } else if m.contains("timed out") || m.contains("timeout") {
+    } else if m.contains("timed out") || m.contains("timeout") || m.contains("deadline") {
         AgentErrorKind::Timeout
-    } else if m.contains("connect") || m.contains("dns") || m.contains("network") || m.contains("unreachable") {
+    } else if m.contains("error sending request")
+        || m.contains("connect")
+        || m.contains("dns")
+        || m.contains("network")
+        || m.contains("unreachable")
+        || m.contains("connection refused")
+        || m.contains("failed to lookup")
+    {
         AgentErrorKind::Unreachable
     } else if m.contains("tool") {
         AgentErrorKind::Tool

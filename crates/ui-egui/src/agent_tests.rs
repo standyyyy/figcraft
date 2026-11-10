@@ -670,3 +670,117 @@ fn a_limited_turn_applies_nothing() {
     assert_eq!(panel.status, RunStatus::Failed);
     assert!(panel.error.as_deref().is_some_and(|e| e.contains("rounds")));
 }
+
+// ---------- the conversation follows the file ----------
+
+#[test]
+fn a_started_turn_is_recorded_in_the_file_transcript() {
+    // A file saved mid-turn must reopen showing that turn, not as if nothing happened.
+    let mut app = harness_with(true);
+    app.ui.agent_host = Some(Box::new(Scripted::new()));
+    app.ui.agent_requests.push(Request::Send { request: "draw a card".into() });
+    crate::agent::perform_requests(&mut app);
+
+    let turns: Vec<&figcraft_agent::run::AgentRun> = app.ui.agent_transcript.conversations.iter().flat_map(|c| c.turns.iter()).collect();
+    assert_eq!(turns.len(), 1, "one turn is recorded");
+    assert_eq!(turns[0].request, "draw a card");
+    assert_eq!(turns[0].outcome, None, "it has not finished");
+    assert!(!app.session.ds().expect("doc").agent().is_empty(), "and it reached the document");
+}
+
+#[test]
+fn a_finished_turn_records_its_outcome_and_keeps_it_out_of_undo() {
+    let mut app = harness_with(true);
+    let (uid, revision) = current(&app);
+    app.ui.agent_host = Some(Box::new(TerminalHost(None)));
+    app.ui.agent_requests.push(Request::Send { request: "draw".into() });
+    crate::agent::perform_requests(&mut app);
+    let turn = app.ui.agent_turn;
+    let step = figcraft_agent::shadow::ReplayStep {
+        command: "node.create".into(),
+        params: serde_json::json!({"type": "rectangle", "width": 10.0, "height": 10.0}),
+    };
+    let envelope = figcraft_agent::CommitEnvelope::new(turn, uid, revision, vec![step], "AI: draw");
+    app.ui.agent_host =
+        Some(Box::new(TerminalHost(Some(figcraft_agent::TurnTerminal::Success { turn, answer: "done".into(), commit: Some(envelope) }))));
+    crate::agent::poll_host(&mut app);
+
+    let turns: Vec<&figcraft_agent::run::AgentRun> = app.ui.agent_transcript.conversations.iter().flat_map(|c| c.turns.iter()).collect();
+    assert_eq!(turns.len(), 1);
+    assert_eq!(turns[0].outcome, Some(figcraft_agent::run::Outcome::Committed));
+    // The design edit is one undo entry; the transcript added none.
+    assert_eq!(app.session.undo_depth().0, 1, "only the commit is in the history");
+}
+
+#[test]
+fn a_failed_turn_is_recorded_as_failed_not_committed() {
+    // The transcript and the document must agree: a turn that applied nothing is not "committed".
+    let mut app = harness_with(true);
+    app.ui.agent_host = Some(Box::new(TerminalHost(None)));
+    app.ui.agent_requests.push(Request::Send { request: "draw".into() });
+    crate::agent::perform_requests(&mut app);
+    let turn = app.ui.agent_turn;
+    app.ui.agent_host = Some(Box::new(TerminalHost(Some(figcraft_agent::TurnTerminal::Failed {
+        turn,
+        kind: figcraft_agent::AgentErrorKind::Unreachable,
+        message: "offline".into(),
+    }))));
+    crate::agent::poll_host(&mut app);
+
+    let turns: Vec<&figcraft_agent::run::AgentRun> = app.ui.agent_transcript.conversations.iter().flat_map(|c| c.turns.iter()).collect();
+    assert_eq!(turns.first().and_then(|t| t.outcome), Some(figcraft_agent::run::Outcome::Failed));
+    assert_eq!(app.session.undo_depth().0, 0, "nothing was applied");
+}
+
+#[test]
+fn opening_another_file_shows_that_files_conversation() {
+    // Two files, two conversations: switching tabs must not leak one file's chat into the other.
+    let mut app = harness_with(true);
+    crate::agent::sync_transcript_from_document(&mut app);
+    let first_uid = app.session.ds().expect("doc").uid;
+    if let Some(p) = app.ui.agent.as_mut() {
+        p.begin_turn(1, "the first file's request");
+    }
+    crate::agent::begin_transcript_turn(&mut app.ui.agent_transcript, "doc-1", 1, "the first file's request");
+    crate::agent::store_transcript(&mut app);
+
+    // A second file, with its own stored transcript.
+    app.session.execute("file.new", &serde_json::json!({})).expect("file.new");
+    let second_uid = app.session.ds().expect("doc").uid;
+    assert_ne!(first_uid, second_uid, "the test needs two files");
+    let mut other = figcraft_agent::history::Transcript::default();
+    crate::agent::begin_transcript_turn(&mut other, "doc-2", 9, "the second file's request");
+    if let Ok(ds) = app.session.ds_mut() {
+        ds.set_agent(crate::agent::agent_data_for_test(&other));
+    }
+
+    crate::agent::sync_transcript_from_document(&mut app);
+    let requests: Vec<&str> = app.ui.agent_transcript.conversations.iter().flat_map(|c| c.turns.iter()).map(|t| t.request.as_str()).collect();
+    assert_eq!(requests, ["the second file's request"], "the panel shows the new file's conversation");
+}
+
+#[test]
+fn a_turn_that_was_running_when_saved_reopens_as_interrupted() {
+    // A turn with no outcome was running when the file was written: after a reopen nothing is
+    // running, so it shows as interrupted rather than as still streaming.
+    let mut s = figcraft_engine::Session::new();
+    s.execute("file.new", &serde_json::json!({})).expect("file.new");
+    let mut transcript = figcraft_agent::history::Transcript::default();
+    crate::agent::begin_transcript_turn(&mut transcript, "doc-1", 1, "an unfinished request");
+    if let Ok(ds) = s.ds_mut() {
+        ds.set_agent(crate::agent::agent_data_for_test(&transcript));
+        ds.mark_saved();
+    }
+    let mut app = crate::FigApp::new(s, Box::new(crate::NoServices));
+    app.ui.agent = Some(AgentPanel::new("doc-1"));
+
+    crate::agent::sync_transcript_from_document(&mut app);
+    // Force the switch path by pretending a different file was bound before.
+    app.ui.agent_transcript_uid = Some(0);
+    crate::agent::sync_transcript_from_document(&mut app);
+
+    let panel = app.ui.agent.as_ref().expect("panel");
+    assert_eq!(panel.status, RunStatus::Idle, "not running after a reopen");
+    assert_eq!(panel.current.as_ref().map(|r| r.request.as_str()), Some("an unfinished request"), "the request is shown");
+    assert_eq!(panel.current.as_ref().and_then(|r| r.outcome), None, "and it has no outcome");
+}

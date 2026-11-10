@@ -414,6 +414,8 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
     crate::windows::confirm_close_tab(app, ctx);
     // The Agent panel's requests are performed after every draw, so a model call or a save dialog
     // never happens inside one.
+    // Keep the panel's conversation tied to the open file, before requests or the worker run.
+    crate::agent::sync_transcript_from_document(app);
     crate::agent::perform_requests(app);
     // The worker's events, drained after the draw so a frame never waits on it.
     crate::agent::poll_host(app);

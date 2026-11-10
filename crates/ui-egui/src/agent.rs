@@ -469,6 +469,29 @@ pub fn conversation_id(doc_uid: u64) -> String {
     format!("doc-{doc_uid}")
 }
 
+impl AgentPanel {
+    /// Show the newest turn from a transcript as this panel's current one.
+    ///
+    /// A turn that was running when the file was saved has `outcome: None`; it reopens as idle with
+    /// its request shown, not as a turn that is still streaming -- nothing is running after a reopen.
+    pub fn settle_unfinished(&mut self, transcript: &figcraft_agent::history::Transcript) {
+        self.tools.clear();
+        self.error = None;
+        self.last_undo_label = None;
+        let newest = transcript.conversations.iter().flat_map(|c| c.turns.iter()).next_back();
+        match newest {
+            Some(run) => {
+                self.current = Some(run.clone());
+                self.status = status_of(Some(run));
+            }
+            None => {
+                self.current = None;
+                self.status = RunStatus::Idle;
+            }
+        }
+    }
+}
+
 /// The starting status of a turn read back from a file: an unfinished one is interrupted, not
 /// running.
 pub fn status_of(run: Option<&AgentRun>) -> RunStatus {
@@ -994,7 +1017,14 @@ fn start_turn(app: &mut crate::FigApp, request: &str) {
             return;
         }
     };
-    app.ui.agent_turn = app.ui.agent_turn.wrapping_add(1);
+    // The turn is recorded when it starts, so a crash mid-turn leaves a record that reopens as
+    // interrupted rather than as if it never happened.
+    let conversation = conversation_id_of(app);
+    let next_turn = app.ui.agent_turn.wrapping_add(1);
+    begin_transcript_turn(&mut app.ui.agent_transcript, &conversation, next_turn, request);
+    app.ui.agent_turn = next_turn;
+    // Persist the started turn at once: a file saved while it runs must reopen with it there.
+    store_transcript(app);
     let turn = app.ui.agent_turn;
     if let Some(panel) = app.ui.agent.as_mut() {
         panel.begin_turn(turn, request);
@@ -1036,6 +1066,9 @@ fn set_error(app: &mut crate::FigApp, message: &str) {
 /// Called after the draw, so a frame never waits on the worker. When a turn succeeds, its envelope is
 /// applied here, on the UI thread, which is the only thread that touches the live document.
 pub fn poll_host(app: &mut crate::FigApp) {
+    // A tab switch shows that file's conversation. Done here rather than in the draw so the panel
+    // never borrows the session while painting.
+    sync_transcript_from_document(app);
     let Some(host) = app.ui.agent_host.as_mut() else { return };
     let events = host.drain();
     let terminal = host.take_terminal();
@@ -1053,6 +1086,12 @@ pub fn poll_host(app: &mut crate::FigApp) {
     if let Some(terminal) = terminal {
         app.ui.agent_running.finish();
         apply_terminal(app, &terminal);
+        // The turn is over: record how it ended in the file's conversation and persist it. Only a
+        // success can have committed anything, and `apply_terminal` has done that already.
+        if let Some(panel) = app.ui.agent.as_ref() {
+            record_turn(&mut app.ui.agent_transcript, panel, &terminal);
+        }
+        store_transcript(app);
     }
 }
 
@@ -1136,6 +1175,59 @@ fn set_conflict(app: &mut crate::FigApp, message: &str) {
     }
 }
 
+/// Load the open file's stored transcript into the panel, once per file switch.
+///
+/// The transcript is file data, so it must follow the tab: switching files shows that file's
+/// conversation, not the previous one's. Comparing the uid means this costs nothing per frame.
+pub fn sync_transcript_from_document(app: &mut crate::FigApp) {
+    let Some(uid) = app.session.ds().ok().map(|d| d.uid) else { return };
+    if app.ui.agent_transcript_uid == Some(uid) {
+        return;
+    }
+    // Only a real switch replaces the panel's view. The first binding for a file (uid becomes known)
+    // must not clear a turn the panel is already showing: the app can start a turn before any frame
+    // has bound a uid, and clearing it there would make the turn uncommittable.
+    let switched = app.ui.agent_transcript_uid.is_some_and(|old| old != uid);
+    app.ui.agent_transcript_uid = Some(uid);
+    let stored = app.session.ds().ok().map(|d| d.agent().clone()).unwrap_or_default();
+    app.ui.agent_transcript = transcript_from_agent_data(&stored);
+    if switched && let Some(panel) = app.ui.agent.as_mut() {
+        // A turn that was running when the file was saved did not finish: it reopens as interrupted,
+        // not as a turn that is still streaming.
+        panel.settle_unfinished(&app.ui.agent_transcript);
+    }
+}
+
+/// Write the panel's transcript back to the open file.
+///
+/// Called after the panel's state changes, so a save carries the conversation and a transcript change
+/// marks the file dirty. A document that is gone is not an error: the tab was closed mid-turn.
+pub fn store_transcript(app: &mut crate::FigApp) {
+    let data = agent_data_from_transcript(&app.ui.agent_transcript);
+    if let Ok(ds) = app.session.ds_mut() {
+        ds.set_agent(data);
+    }
+}
+
+/// The stored form of a transcript, for tests that build one directly.
+pub fn agent_data_for_test(transcript: &figcraft_agent::history::Transcript) -> figcraft_format::agent::AgentData {
+    agent_data_from_transcript(transcript)
+}
+
+/// The transcript a file's stored data describes, or an empty one when the data is unusable.
+fn transcript_from_agent_data(data: &figcraft_format::agent::AgentData) -> figcraft_agent::history::Transcript {
+    serde_json::from_value(data.json.clone()).unwrap_or_default()
+}
+
+/// The stored form of a transcript, with the current schema version.
+fn agent_data_from_transcript(transcript: &figcraft_agent::history::Transcript) -> figcraft_format::agent::AgentData {
+    match serde_json::to_value(transcript) {
+        Ok(json) => figcraft_format::agent::AgentData::new(json),
+        // Serialization cannot fail for this shape; an empty transcript is the safe answer if it did.
+        Err(_) => figcraft_format::agent::AgentData::default(),
+    }
+}
+
 /// Read the panel's inputs: whether a provider is configured, the requirements list and the chat.
 pub(crate) fn panel_input(app: &mut crate::FigApp) -> PanelInput {
     // Whether the provider is usable, read from preferences every frame so a change in Preferences
@@ -1165,6 +1257,7 @@ pub fn perform_requests(app: &mut crate::FigApp) {
             }
             Request::NewConversation => {
                 app.ui.agent_transcript = figcraft_agent::history::Transcript::default();
+                store_transcript(app);
                 if let Some(p) = app.ui.agent.as_mut() {
                     p.current = None;
                     p.tools.clear();
@@ -1226,6 +1319,57 @@ pub fn perform_requests(app: &mut crate::FigApp) {
                 }
             }
             Request::CloseRequirements => {}
+        }
+    }
+}
+
+/// The conversation id for the open file.
+fn conversation_id_of(app: &mut crate::FigApp) -> String {
+    app.session.ds().ok().map(|d| conversation_id(d.uid)).unwrap_or_else(|| "doc-0".to_string())
+}
+
+/// Record that a turn started, so a file saved mid-turn reopens with it marked interrupted.
+pub(crate) fn begin_transcript_turn(transcript: &mut figcraft_agent::history::Transcript, conversation: &str, turn: u64, request: &str) {
+    let convo = match transcript.conversations.iter_mut().find(|c| c.id == conversation) {
+        Some(c) => c,
+        None => {
+            transcript.conversations.push(figcraft_agent::history::Conversation { id: conversation.to_string(), turns: Vec::new(), summary: None });
+            // The stored transcript is capped, so the oldest conversations go when it grows.
+            let max = figcraft_format::agent::MAX_CONVERSATIONS;
+            while transcript.conversations.len() > max {
+                transcript.conversations.remove(0);
+            }
+            // Just pushed, so this is Some; the match keeps production code free of `expect`.
+            match transcript.conversations.last_mut() {
+                Some(c) => c,
+                None => return,
+            }
+        }
+    };
+    convo.turns.push(figcraft_agent::run::AgentRun { turn, request: request.to_string(), answer: String::new(), tools: Vec::new(), outcome: None });
+    while convo.turns.len() > figcraft_format::agent::MAX_TURNS {
+        convo.turns.remove(0);
+    }
+}
+
+/// Record how a finished turn ended, from the panel's own state.
+///
+/// The outcome is the typed terminal, so a failed, cancelled or limited turn is recorded as such and
+/// never as committed -- the transcript and the document agree about what happened.
+fn record_turn(transcript: &mut figcraft_agent::history::Transcript, panel: &AgentPanel, terminal: &figcraft_agent::TurnTerminal) {
+    let Some(current) = panel.current.as_ref() else { return };
+    let outcome = match terminal {
+        figcraft_agent::TurnTerminal::Success { .. } => figcraft_agent::run::Outcome::Committed,
+        figcraft_agent::TurnTerminal::Failed { .. } | figcraft_agent::TurnTerminal::LimitReached { .. } => figcraft_agent::run::Outcome::Failed,
+        figcraft_agent::TurnTerminal::Cancelled { .. } => figcraft_agent::run::Outcome::Cancelled,
+    };
+    for convo in transcript.conversations.iter_mut() {
+        if let Some(run) = convo.turns.iter_mut().find(|r| r.turn == current.turn) {
+            run.request = current.request.clone();
+            run.answer = current.answer.clone();
+            run.tools = current.tools.clone();
+            run.outcome = Some(outcome);
+            return;
         }
     }
 }

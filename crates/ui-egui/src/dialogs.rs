@@ -276,6 +276,66 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
                     t.text_secondary,
                 );
             }
+            // The in-app Agent's provider. The key is never entered here: preferences are saved as
+            // text, so this asks for the *name* of the variable that holds it on the desktop, and a
+            // browser asks for the key in the panel where it can stay in memory.
+            ui.add_space(10.0);
+            ui.separator();
+            ui.add_space(6.0);
+            crate::widgets::label(ui, tr("Agent"), t.text);
+            let agent = prefs.agent.clone();
+            if crate::widgets::checkbox(ui, agent.enabled, tr("Enable the in-app Agent")) {
+                app.run("pref.agent", json!({"enabled": !agent.enabled}));
+            }
+            let mut provider = json!({});
+            ui.horizontal(|ui| {
+                ui.label(tr("Provider URL"));
+                if let Some(url) =
+                    crate::widgets::text_field_named(ui, egui::Id::unique("pref_agent_url"), &agent.base_url, 220.0, tr("Provider URL"))
+                {
+                    provider["baseUrl"] = json!(url);
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label(tr("Model"));
+                if let Some(model) = crate::widgets::text_field_named(ui, egui::Id::unique("pref_agent_model"), &agent.model, 220.0, tr("Model")) {
+                    provider["model"] = json!(model);
+                }
+            });
+            if !cfg!(target_arch = "wasm32") {
+                let reference = agent.credential.clone().unwrap_or_default();
+                ui.horizontal(|ui| {
+                    ui.label(tr("Key variable"));
+                    if let Some(name) = crate::widgets::text_field_named(
+                        ui,
+                        egui::Id::unique("pref_agent_credential"),
+                        &reference,
+                        220.0,
+                        tr("The environment variable that holds the key"),
+                    ) {
+                        provider["credential"] = json!(name);
+                    }
+                });
+                crate::widgets::label(ui, tr("The name of the variable holding the key, not the key."), t.text_secondary);
+            }
+            if !provider.as_object().is_some_and(|o| o.is_empty()) {
+                app.run("pref.agent", provider);
+            }
+            // What the settings amount to, so a mistake is visible here rather than at the first turn.
+            match figcraft_agent::AgentConfig::from_prefs(&agent) {
+                Ok(_) if agent.enabled && !agent.base_url.trim().is_empty() => {
+                    crate::widgets::label(ui, tr("The Agent is ready."), t.text_secondary);
+                }
+                Ok(_) if !agent.enabled => {
+                    crate::widgets::label(ui, tr("The Agent is off."), t.text_secondary);
+                }
+                Ok(_) => {
+                    crate::widgets::label(ui, tr("Enter the provider URL and model to use the Agent."), t.text_secondary);
+                }
+                Err(e) => {
+                    crate::widgets::label(ui, &e.to_string(), t.text_secondary);
+                }
+            }
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 ui.label(tr("Your name"));

@@ -885,3 +885,72 @@ fn an_export_request_for_a_missing_document_reports_an_error_and_changes_nothing
     assert_eq!(app.session.undo_depth(), depth, "no undo entry");
     assert_eq!(app.session.doc().expect("doc").nodes().count(), layers, "no document change");
 }
+
+// ---------- provider preferences ----------
+
+#[test]
+fn the_agent_can_be_configured_by_command() {
+    // Preferences has Agent controls; they dispatch this command. Without it there was no way to
+    // configure a provider from inside the app at all.
+    let mut app = harness_with(false);
+    assert!(!app.ui.agent_configured, "nothing configured yet");
+
+    app.session
+        .execute("pref.agent", &serde_json::json!({"enabled": true, "baseUrl": "http://127.0.0.1:8000", "model": "test-model"}))
+        .expect("pref.agent");
+
+    // Read back through the same path the panel uses, so the change takes effect without a restart.
+    let _ = crate::agent::panel_input(&mut app);
+    assert!(app.ui.agent_configured, "a valid provider enables the panel at once");
+}
+
+#[test]
+fn the_provider_status_never_carries_the_credential() {
+    // Preferences are saved as text: the status a person sees must not echo the variable's name back
+    // as if it were the key, and must never contain a key.
+    let mut app = harness_with(false);
+    let out = app
+        .session
+        .execute("pref.agent", &serde_json::json!({"enabled": true, "baseUrl": "http://x:1", "model": "m", "credential": "MY_SECRET_VAR"}))
+        .expect("pref.agent");
+    assert_eq!(out["hasCredential"], true);
+    let text = serde_json::to_string(&out).expect("serialize");
+    assert!(!text.contains("MY_SECRET_VAR"), "the status must not echo the name: {text}");
+    assert!(out.get("credential").is_none(), "and has no field for it");
+}
+
+#[test]
+fn an_invalid_provider_url_is_not_configured() {
+    // A URL the client refuses leaves the panel disabled and says why, rather than failing at the
+    // first turn.
+    let mut app = harness_with(false);
+    app.session.execute("pref.agent", &serde_json::json!({"enabled": true, "baseUrl": "https://example.com/v1", "model": "m"})).expect("pref.agent");
+    let _ = crate::agent::panel_input(&mut app);
+    assert!(!app.ui.agent_configured, "https is refused until a shared transport exists");
+}
+
+#[test]
+fn disabling_the_agent_leaves_it_unconfigured() {
+    let mut app = harness_with(false);
+    app.session.execute("pref.agent", &serde_json::json!({"enabled": true, "baseUrl": "http://127.0.0.1:8000", "model": "m"})).expect("enable");
+    let _ = crate::agent::panel_input(&mut app);
+    assert!(app.ui.agent_configured);
+
+    app.session.execute("pref.agent", &serde_json::json!({"enabled": false})).expect("disable");
+    let _ = crate::agent::panel_input(&mut app);
+    assert!(!app.ui.agent_configured, "a disabled Agent is not configured");
+}
+
+#[test]
+fn a_test_of_the_settings_never_touches_the_document() {
+    // Whatever a "test connection" does, it must not create a shadow, a replay or an undo entry: it
+    // is a settings check, not a turn.
+    let app = harness_with(true);
+    let depth = app.session.undo_depth();
+    let layers = app.session.doc().expect("doc").nodes().count();
+    // Building the config and validating it is what a settings check does before any request.
+    let config = figcraft_agent::AgentConfig::from_prefs(&app.session.prefs.agent).expect("valid");
+    assert_eq!(config.model(), "test-model");
+    assert_eq!(app.session.undo_depth(), depth, "no undo entry");
+    assert_eq!(app.session.doc().expect("doc").nodes().count(), layers, "no document change");
+}

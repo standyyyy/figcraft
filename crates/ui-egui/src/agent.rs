@@ -62,6 +62,8 @@ pub struct AgentPanel {
     pub status: RunStatus,
     /// The tool activity of the current turn, in order.
     pub tools: Vec<ToolRow>,
+    /// Non-fatal diagnostics from the running turn, newest last (a shortened history, say).
+    pub notices: Vec<String>,
     /// The error text of the last failure, with the action to take.
     pub error: Option<String>,
     /// The undo label the last commit used (shown so a person can find the step).
@@ -193,6 +195,7 @@ impl AgentPanel {
             current: None,
             status: RunStatus::Idle,
             tools: Vec::new(),
+            notices: Vec::new(),
             error: None,
             last_undo_label: None,
             editing: None,
@@ -268,6 +271,14 @@ impl AgentPanel {
                     run.apply(event, limits);
                 }
                 self.status = RunStatus::Cancelled;
+            }
+            // A diagnostic: shown, but it changes neither the turn's status nor its record. The turn
+            // is still running, and a notice is not a failure.
+            AgentEvent::Notice { message, .. } => {
+                self.notices.push(message.clone());
+                if self.notices.len() > 8 {
+                    self.notices.remove(0);
+                }
             }
         }
     }

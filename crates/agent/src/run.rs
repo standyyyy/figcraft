@@ -82,6 +82,11 @@ pub enum AgentEvent {
     Failed { turn: u64, kind: AgentErrorKind, message: String },
     /// The turn was cancelled; nothing reached the document.
     Cancelled { turn: u64 },
+    /// A non-fatal diagnostic: something was adjusted to let the turn continue.
+    ///
+    /// Not a failure and not terminal. The panel shows it so a person knows the Agent saw a shortened
+    /// history, rather than wondering why it forgot an earlier turn.
+    Notice { turn: u64, message: String },
 }
 
 impl AgentEvent {
@@ -94,7 +99,8 @@ impl AgentEvent {
             | AgentEvent::ToolFinished { turn, .. }
             | AgentEvent::Committed { turn, .. }
             | AgentEvent::Failed { turn, .. }
-            | AgentEvent::Cancelled { turn } => *turn,
+            | AgentEvent::Cancelled { turn }
+            | AgentEvent::Notice { turn, .. } => *turn,
         }
     }
 
@@ -222,6 +228,8 @@ impl AgentRun {
             AgentEvent::Committed { .. } => self.finish(Outcome::Committed),
             AgentEvent::Failed { .. } => self.finish(Outcome::Failed),
             AgentEvent::Cancelled { .. } => self.finish(Outcome::Cancelled),
+            // A diagnostic is not progress and not an ending: the run's record is unchanged.
+            AgentEvent::Notice { .. } => {}
         }
     }
 }

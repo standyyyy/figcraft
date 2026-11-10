@@ -291,3 +291,167 @@ fn a_turn_with_no_continuation_stores_none() {
     let text = serde_json::to_string(&stored.json).expect("serialize");
     assert!(!text.contains("continuation"), "an empty continuation is not written: {text}");
 }
+
+// ---------- compaction of the messages actually sent ----------
+
+/// A continuation history with `turns` complete turns, each a user ask, a tool call and result, and
+/// an answer. Matches the shape Rig sends.
+fn history_of(turns: usize, result_chars: usize) -> Vec<serde_json::Value> {
+    let mut out = Vec::new();
+    for i in 0..turns {
+        out.push(json!({"role": "user", "content": [{"type": "text", "text": format!("ask {i}")}]}));
+        out.push(json!({"role": "assistant", "content": [
+            {"type": "toolcall", "id": {"provider": format!("c{i}")},
+             "function": {"name": "create_node", "arguments": {"type": "rectangle"}}}
+        ]}));
+        out.push(json!({"role": "user", "content": [
+            {"type": "toolresult", "call": {"provider": format!("c{i}")}, "name": "create_node",
+             "content": [{"type": "text", "text": "x".repeat(result_chars)}]}
+        ]}));
+        out.push(json!({"role": "assistant", "content": [{"type": "text", "text": format!("done {i}")}]}));
+    }
+    out
+}
+
+#[test]
+fn a_history_just_below_the_budget_is_sent_unchanged() {
+    let history = history_of(3, 100);
+    let total: usize = crate::history::history_turns(&history).iter().map(|t| t.estimated_chars()).sum();
+    let (out, report) = crate::history::compact_request(&history, total + 10, 2);
+    assert_eq!(out, history, "nothing to do");
+    assert!(report.is_empty(), "and nothing reported: {report:?}");
+}
+
+#[test]
+fn a_history_just_above_the_budget_has_its_oldest_turns_summarized() {
+    let history = history_of(6, 100);
+    let total: usize = crate::history::history_turns(&history).iter().map(|t| t.estimated_chars()).sum();
+    // A budget under the total but above what the recent turns need.
+    let (out, report) = crate::history::compact_request(&history, total / 2, 2);
+    assert!(report.removed_turns > 0, "old turns were folded: {report:?}");
+    assert!(report.summarized, "a summary was prepended");
+    assert!(out.len() < history.len(), "the request is smaller");
+    // The summary is the first message and says it is a summary.
+    assert_eq!(out[0]["role"], "user");
+    assert!(text_of(&out[0]).contains("Earlier in this conversation"), "got {:?}", text_of(&out[0]));
+}
+
+#[test]
+fn the_recent_complete_turns_always_survive() {
+    // Keeping the last few whole turns is what lets a follow-up make sense.
+    let history = history_of(8, 100);
+    let total: usize = crate::history::history_turns(&history).iter().map(|t| t.estimated_chars()).sum();
+    let out = crate::history::history_turns(&crate::history::compact_request(&history, total / 3, 3).0);
+    // The kept turns plus the two messages of the summary: the last three asks are all still there.
+    let asks: Vec<String> = out.iter().map(|t| text_of(&t.messages[0])).collect();
+    for recent in (5..8).map(|i| format!("ask {i}")) {
+        assert!(asks.iter().any(|a| a.contains(&recent)), "`{recent}` must survive: {asks:?}");
+    }
+}
+
+#[test]
+fn a_large_tool_result_is_elided_before_a_whole_turn_is_removed() {
+    // The biggest payloads cost the most and mean the least once their turn is over, so they go
+    // first: that keeps more turns' worth of meaning than dropping turns would.
+    let history = history_of(2, 50_000);
+    let total: usize = crate::history::history_turns(&history).iter().map(|t| t.estimated_chars()).sum();
+    let (out, report) = crate::history::compact_request(&history, total / 2, 5);
+    assert!(report.elided_results > 0, "tool results were elided: {report:?}");
+    assert_eq!(report.removed_turns, 0, "no turn was removed while eliding sufficed: {report:?}");
+    let text = serde_json::to_string(&out).expect("serialize");
+    assert!(text.contains("omitted to fit the request"), "the elision says so");
+}
+
+#[test]
+fn tool_call_and_result_pairs_stay_together() {
+    // A provider rejects a tool result whose call is gone, so turns are removed whole.
+    let history = history_of(10, 500);
+    let total: usize = crate::history::history_turns(&history).iter().map(|t| t.estimated_chars()).sum();
+    let (out, _report) = crate::history::compact_request(&history, total / 4, 2);
+    // Every remaining toolcall has its result, and every result its call.
+    let mut calls: Vec<String> = Vec::new();
+    let mut results: Vec<String> = Vec::new();
+    for m in &out {
+        for part in m.get("content").and_then(serde_json::Value::as_array).into_iter().flatten() {
+            match part.get("type").and_then(serde_json::Value::as_str) {
+                Some("toolcall") => {
+                    if let Some(id) = part.get("id").and_then(|i| i.get("provider")).and_then(serde_json::Value::as_str) {
+                        calls.push(id.to_string());
+                    }
+                }
+                Some("toolresult") => {
+                    if let Some(id) = part.get("call").and_then(|i| i.get("provider")).and_then(serde_json::Value::as_str) {
+                        results.push(id.to_string());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    for r in &results {
+        assert!(calls.contains(r), "a result without its call survived: {r}");
+    }
+    for c in &calls {
+        assert!(results.contains(c), "a call without its result survived: {c}");
+    }
+}
+
+#[test]
+fn repeated_compaction_does_not_grow_the_summary() {
+    // Compacting an already-compacted history must not append a second summary or grow without bound.
+    let history = history_of(12, 200);
+    let total: usize = crate::history::history_turns(&history).iter().map(|t| t.estimated_chars()).sum();
+    let (once, _) = crate::history::compact_request(&history, total / 4, 2);
+    let (twice, report) = crate::history::compact_request(&once, 100, 1);
+    let summaries = twice.iter().filter(|m| text_of(m).contains("Earlier in this conversation")).count();
+    assert!(summaries <= 2, "at most one summary per compaction: {summaries}");
+    assert!(report.removed_turns > 0 || report.elided_results > 0, "the second pass did something");
+    // The result is bounded, not growing.
+    assert!(twice.len() <= once.len() + 2, "bounded: {} then {}", once.len(), twice.len());
+}
+
+#[test]
+fn a_cjk_history_is_estimated_by_characters_not_bytes() {
+    // CJK is three bytes per character in JSON: a byte estimate would compact far too eagerly.
+    let mut history = Vec::new();
+    for i in 0..4 {
+        history.push(json!({"role": "user", "content": [{"type": "text", "text": format!("画一个卡片 {i}")}]}));
+        history.push(json!({"role": "assistant", "content": [{"type": "text", "text": "好的"}]}));
+    }
+    let turns = crate::history::history_turns(&history);
+    let estimated: usize = turns.iter().map(|t| t.estimated_chars()).sum();
+    let bytes = serde_json::to_string(&history).expect("serialize").len();
+    assert!(estimated < bytes, "the estimate counts characters ({estimated}), not bytes ({bytes})");
+    // A generous budget keeps it whole.
+    let (out, report) = crate::history::compact_request(&history, estimated, 2);
+    assert_eq!(out, history);
+    assert!(report.is_empty());
+}
+
+#[test]
+fn the_system_contract_is_never_part_of_the_summarized_history() {
+    // The history passed here is only the previous turns; the preamble is the caller's and is not in
+    // it. This pins that compaction does not invent a system message of its own.
+    let history = history_of(6, 300);
+    let (out, _) = crate::history::compact_request(&history, 200, 1);
+    assert!(!out.iter().any(|m| m.get("role").and_then(serde_json::Value::as_str) == Some("system")), "compaction adds no system message");
+}
+
+#[test]
+fn an_empty_history_compacts_to_nothing() {
+    let (out, report) = crate::history::compact_request(&[], 100, 3);
+    assert!(out.is_empty());
+    assert!(report.is_empty());
+}
+
+/// The text in a message, for assertions.
+fn text_of(message: &serde_json::Value) -> String {
+    message
+        .get("content")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|p| p.get("text").and_then(serde_json::Value::as_str))
+        .collect::<Vec<_>>()
+        .join(" ")
+}

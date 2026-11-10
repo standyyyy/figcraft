@@ -267,3 +267,248 @@ pub fn continuation_messages(stored: &[Value]) -> Vec<rig_core::completion::Mess
 pub fn continuation_is_intact(stored: &[Value]) -> bool {
     stored.iter().all(|v| serde_json::from_value::<rig_core::completion::Message>(v.clone()).is_ok())
 }
+
+// ---------- compaction of the messages actually sent ----------
+
+/// Most characters of continuation history one request may carry.
+///
+/// The estimate counts JSON bytes, which over-estimates token cost for ASCII and under-estimates for
+/// CJK; it is a bound, not a token count, and it exists so a long conversation cannot grow a request
+/// without limit.
+pub const MAX_REQUEST_CHARS: usize = 96 * 1024;
+/// How many recent complete turns always survive compaction.
+pub const KEEP_RECENT_TURNS: usize = 3;
+/// Most characters one tool result may carry before it is elided.
+const MAX_TOOL_RESULT_CHARS: usize = 2 * 1024;
+
+/// What compacting the request history did.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RequestCompaction {
+    /// Turns removed from the front and folded into the summary.
+    pub removed_turns: usize,
+    /// Tool results shortened in place, oldest first.
+    pub elided_results: usize,
+    /// Whether a summary line was prepended.
+    pub summarized: bool,
+}
+
+impl RequestCompaction {
+    /// Whether anything changed.
+    pub fn is_empty(&self) -> bool {
+        self.removed_turns == 0 && self.elided_results == 0 && !self.summarized
+    }
+}
+
+/// One complete turn of a request history: a user message, the assistant/tool exchange it caused, and
+/// the final assistant answer.
+///
+/// Grouping matters because a provider rejects a `toolresult` whose `toolcall` is missing, so turns
+/// are removed whole rather than message by message.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HistoryTurn {
+    /// The messages making up this turn, in order.
+    pub messages: Vec<Value>,
+}
+
+impl HistoryTurn {
+    /// Characters this turn is estimated to cost.
+    pub fn estimated_chars(&self) -> usize {
+        self.messages.iter().map(json_chars).sum()
+    }
+
+    /// Whether any message in the turn names a tool call or result.
+    pub fn tool_names(&self) -> Vec<String> {
+        let mut names = Vec::new();
+        for m in &self.messages {
+            for c in m.get("content").and_then(Value::as_array).into_iter().flatten() {
+                match c.get("type").and_then(Value::as_str) {
+                    Some("toolcall") => {
+                        if let Some(n) = c.get("function").and_then(|f| f.get("name")).and_then(Value::as_str) {
+                            names.push(n.to_string());
+                        }
+                    }
+                    Some("toolresult") => {
+                        if let Some(n) = c.get("name").and_then(Value::as_str) {
+                            names.push(format!("{n}→"));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        names
+    }
+
+    /// The text a summary should mention: the user's ask and the assistant's answer.
+    pub fn gist(&self) -> String {
+        let mut ask = String::new();
+        let mut answer = String::new();
+        for m in &self.messages {
+            let role = m.get("role").and_then(Value::as_str).unwrap_or("");
+            let text = text_of(m);
+            if text.is_empty() {
+                continue;
+            }
+            match role {
+                "user" => {
+                    if ask.is_empty() {
+                        ask = text;
+                    }
+                }
+                "assistant" => answer = text,
+                _ => {}
+            }
+        }
+        if answer.is_empty() { clip(&ask, 200) } else { format!("{} → {}", clip(&ask, 160), clip(&answer, 160)) }
+    }
+}
+
+/// Split a continuation history into whole turns.
+///
+/// A turn starts at a `user` message that is not a tool result and runs until the next such message.
+/// A leading fragment (a history that begins mid-turn) becomes its own turn so nothing is dropped
+/// silently.
+pub fn history_turns(history: &[Value]) -> Vec<HistoryTurn> {
+    let mut turns: Vec<HistoryTurn> = Vec::new();
+    let mut current: Vec<Value> = Vec::new();
+    for m in history {
+        let starts_turn = m.get("role").and_then(Value::as_str) == Some("user") && !is_tool_result(m);
+        if starts_turn && !current.is_empty() {
+            turns.push(HistoryTurn { messages: std::mem::take(&mut current) });
+        }
+        current.push(m.clone());
+    }
+    if !current.is_empty() {
+        turns.push(HistoryTurn { messages: current });
+    }
+    turns
+}
+
+/// Whether a `user` message is a tool result the provider expects after a tool call.
+fn is_tool_result(message: &Value) -> bool {
+    message.get("content").and_then(Value::as_array).is_some_and(|c| c.iter().any(|p| p.get("type").and_then(Value::as_str) == Some("toolresult")))
+}
+
+/// The text in a message, joined across its text parts.
+fn text_of(message: &Value) -> String {
+    let mut out = String::new();
+    for part in message.get("content").and_then(Value::as_array).into_iter().flatten() {
+        if part.get("type").and_then(Value::as_str) == Some("text")
+            && let Some(t) = part.get("text").and_then(Value::as_str)
+        {
+            if !out.is_empty() {
+                out.push(' ');
+            }
+            out.push_str(t);
+        }
+    }
+    out
+}
+
+/// Characters a JSON value costs, by its serialized length.
+fn json_chars(v: &Value) -> usize {
+    // A cheap estimate: strings dominate, and `to_string` on a large value is the thing being avoided.
+    fn walk(v: &Value, n: &mut usize) {
+        match v {
+            Value::String(s) => *n += s.chars().count(),
+            Value::Array(a) => a.iter().for_each(|x| walk(x, n)),
+            Value::Object(o) => {
+                for (k, x) in o {
+                    *n += k.chars().count();
+                    walk(x, n);
+                }
+            }
+            Value::Null => {}
+            _ => *n += 8,
+        }
+    }
+    let mut n = 0;
+    walk(v, &mut n);
+    n
+}
+
+/// Shorten the largest tool results first, so the shape of the conversation survives.
+///
+/// A tool result is what the model does not need verbatim once the turn is over: the document holds
+/// the outcome. Eliding the biggest first keeps more turns' worth of meaning than removing whole
+/// turns would.
+fn elide_tool_results(turns: &mut [HistoryTurn], max_chars: usize) -> usize {
+    // (turn index, message index, part index, size) for every oversized tool result, biggest first.
+    let mut big: Vec<(usize, usize, usize, usize)> = Vec::new();
+    for (ti, turn) in turns.iter().enumerate() {
+        for (mi, message) in turn.messages.iter().enumerate() {
+            for (pi, part) in message.get("content").and_then(Value::as_array).into_iter().flatten().enumerate() {
+                if part.get("type").and_then(Value::as_str) == Some("toolresult") {
+                    let size = json_chars(part);
+                    if size > max_chars {
+                        big.push((ti, mi, pi, size));
+                    }
+                }
+            }
+        }
+    }
+    big.sort_by_key(|entry| std::cmp::Reverse(entry.3));
+    let mut elided = 0;
+    for (ti, mi, pi, size) in big {
+        if let Some(parts) = turns[ti].messages[mi].get_mut("content").and_then(Value::as_array_mut)
+            && let Some(part) = parts.get_mut(pi)
+        {
+            let note = format!("[{size} characters of tool output omitted to fit the request]");
+            part["content"] = json!([{"type": "text", "text": note}]);
+            elided += 1;
+        }
+    }
+    elided
+}
+
+/// Fit a continuation history into `budget` characters before it is sent.
+///
+/// The system contract is not part of `history` and is never summarised. Three things happen, in the
+/// order that loses the least meaning: the largest tool results are elided, the oldest turns are
+/// folded into one explicit summary line, and the most recent [`KEEP_RECENT_TURNS`] complete turns
+/// always survive. Tool call and result pairs stay in the same turn, so the provider never sees a
+/// result whose call is gone.
+///
+/// Returns the compacted history and what was done; the caller replaces the stored history only after
+/// this succeeds.
+pub fn compact_request(history: &[Value], budget: usize, keep_recent: usize) -> (Vec<Value>, RequestCompaction) {
+    let mut report = RequestCompaction::default();
+    let mut turns = history_turns(history);
+    if turns.is_empty() {
+        return (Vec::new(), report);
+    }
+    let total: usize = turns.iter().map(HistoryTurn::estimated_chars).sum();
+    if total <= budget {
+        return (history.to_vec(), report);
+    }
+
+    // Large payloads first: they cost the most and mean the least once their turn is over.
+    report.elided_results = elide_tool_results(&mut turns, MAX_TOOL_RESULT_CHARS);
+    let after_elide: usize = turns.iter().map(HistoryTurn::estimated_chars).sum();
+    if after_elide <= budget {
+        return (turns.into_iter().flat_map(|t| t.messages).collect(), report);
+    }
+
+    // Then whole old turns, keeping the most recent ones.
+    if turns.len() > keep_recent {
+        let keep_from = turns.len() - keep_recent;
+        let removed: Vec<HistoryTurn> = turns.drain(..keep_from).collect();
+        report.removed_turns = removed.len();
+        let mut lines: Vec<String> = Vec::new();
+        for t in &removed {
+            let tools = t.tool_names();
+            let tool_note = if tools.is_empty() { String::new() } else { format!(" [{}]", tools.join(" ")) };
+            lines.push(format!("- {}{tool_note}", t.gist()));
+        }
+        let summary = clip(&format!("Earlier in this conversation:\n{}", lines.join("\n")), 2000);
+        let mut out: Vec<Value> = vec![
+            json!({"role": "user", "content": [{"type": "text", "text": summary}]}),
+            json!({"role": "assistant", "content": [{"type": "text", "text": "Understood."}]}),
+        ];
+        out.extend(turns.into_iter().flat_map(|t| t.messages));
+        report.summarized = true;
+        return (out, report);
+    }
+
+    (turns.into_iter().flat_map(|t| t.messages).collect(), report)
+}

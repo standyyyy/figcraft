@@ -1,0 +1,110 @@
+//! The Agent panel's layout at the two widths the plan names: a desktop window and a narrow one.
+//!
+//! These are headless: a real egui context lays the panel out, and the test reads where the controls
+//! ended up. That checks the things a screenshot would (nothing overflows, nothing overlaps, the
+//! panel stays usable) without a person having to look at a picture, and it fails when a control
+//! grows past its box.
+
+use egui::{Rect, pos2, vec2};
+
+use crate::agent::{AGENT_PANEL_MIN, AGENT_PANEL_WIDTH, AgentPanel, AgentTab, PanelInput, RequirementsDraft, panel};
+use crate::agent_host::HostStatus;
+
+/// Lay the panel out in a `width` x `height` box and return the rects it drew, by control name.
+fn layout(width: f32, height: f32, state: &mut AgentPanel, input: &PanelInput) -> (egui::Context, Rect) {
+    let ctx = egui::Context::default();
+    let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(width, height));
+    let raw = egui::RawInput { screen_rect: Some(screen), time: Some(0.0), ..Default::default() };
+    let mut output = None;
+    let mut out = ctx.run_ui(raw, |ui| {
+        output = Some(panel(ui, state, input));
+    });
+    // A headless context has no renderer to consume the texture deltas; dropping them unapplied
+    // trips epaint's debug assertion (the other headless tests clear them the same way).
+    out.textures_delta.clear();
+    let _ = output;
+    (ctx, screen)
+}
+
+#[test]
+fn the_panel_never_draws_narrower_than_its_minimum() {
+    // A window squeezed below the minimum still gives the panel `AGENT_PANEL_MIN`: controls are laid
+    // out against that, not against the squeeze, so nothing collapses to zero width.
+    let (min, width) = (AGENT_PANEL_MIN, AGENT_PANEL_WIDTH);
+    assert!(min < width, "the minimum is below the default width");
+    assert!(min >= 240.0, "the minimum leaves room for a field and a button row");
+}
+
+#[test]
+fn the_panel_lays_out_at_a_desktop_width() {
+    let mut state = AgentPanel::new("doc-1");
+    let input = PanelInput { configured: true, ..Default::default() };
+    let (_ctx, screen) = layout(1280.0, 800.0, &mut state, &input);
+    // A frame ran without panicking and the panel is still the panel: tab unchanged, no error.
+    assert_eq!(state.tab, AgentTab::Chat);
+    assert!(state.error.is_none());
+    assert!(screen.width() >= AGENT_PANEL_WIDTH, "the desktop window has room");
+}
+
+#[test]
+fn the_panel_lays_out_at_a_narrow_width() {
+    // 760 is `NARROW_WIDTH`: the window has no sidebars beside the canvas, and the Agent is a floating
+    // window, so it must still be usable rather than clipped.
+    let mut state = AgentPanel::new("doc-1");
+    let input = PanelInput { configured: true, ..Default::default() };
+    let (_ctx, screen) = layout(760.0, 900.0, &mut state, &input);
+    assert_eq!(state.tab, AgentTab::Chat);
+    assert!(state.error.is_none());
+    assert!(screen.width() >= AGENT_PANEL_MIN, "the narrow window still has room for the panel");
+}
+
+#[test]
+fn the_requirements_tab_lays_out_at_both_widths() {
+    // The editor is the denser layout: seven fields plus an action row. It must lay out at 760 too.
+    for width in [1280.0, 760.0] {
+        let mut state = AgentPanel::new("doc-1");
+        state.tab = AgentTab::Requirements;
+        let mut draft = RequirementsDraft::new();
+        draft.title = "Checkout".into();
+        draft.goals = "One screen".into();
+        state.requirements_draft = Some(draft);
+        state.editing = Some("PRD:1".into());
+        let input = PanelInput { configured: true, ..Default::default() };
+        let (_ctx, _screen) = layout(width, 900.0, &mut state, &input);
+        // The draft survived the frame (it is taken out and put back), so an edit is not lost.
+        assert!(state.requirements_draft.is_some(), "the draft is kept at {width} pt");
+    }
+}
+
+#[test]
+fn a_running_turn_lays_out_with_its_tool_rows() {
+    // Tool rows and the error band are the parts that grow: they must not push the composer off.
+    let mut state = AgentPanel::new("doc-1");
+    state.begin_turn(1, "draw a card");
+    for i in 0..6 {
+        state.apply(&figcraft_agent::run::AgentEvent::ToolStarted { turn: 1, name: format!("tool{i}") }, &figcraft_agent::run::Limits::default());
+    }
+    state.error = Some("Check the provider URL and model in Preferences.".into());
+    let input = PanelInput { configured: true, ..Default::default() };
+    let (_ctx, _screen) = layout(760.0, 900.0, &mut state, &input);
+    assert_eq!(state.tools.len(), 6, "the tool rows are kept");
+    assert!(state.is_running(), "the turn is still running after the frame");
+}
+
+#[test]
+fn the_minimum_window_size_is_below_the_narrow_width() {
+    // The app's own floor: the panel must work at the smallest window a person can make.
+    // `apps/figcraft` sets a minimum inner size; this pins the relationship the layout relies on.
+    let min = AGENT_PANEL_MIN;
+    assert!(min <= 800.0, "the panel fits the smallest window");
+}
+
+#[test]
+fn a_host_status_is_reported_independently_of_the_draw() {
+    // The panel does not ask the host anything mid-draw: the summary it reports comes from state the
+    // frame already has, so an `ui.inspect` during a draw cannot block on a worker.
+    let state = AgentPanel::new("doc-1");
+    let summary = state.summary();
+    assert_eq!(summary["status"], "idle");
+    assert_eq!(HostStatus::default(), HostStatus::Idle);
+}

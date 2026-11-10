@@ -59,6 +59,9 @@ mod theme_startup_tests;
 mod a11y_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod agent_host_tests;
+
+#[cfg(test)]
+mod agent_layout_tests;
 #[cfg(test)]
 mod agent_tests;
 #[cfg(test)]

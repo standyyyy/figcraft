@@ -266,7 +266,7 @@ impl TurnDriver {
         kind: AgentErrorKind,
         message: String,
     ) -> Self {
-        let event = AgentEvent::Failed { turn, kind, message: message.clone() };
+        let event = AgentEvent::Started { turn };
         let outcome = StreamOutcome::Failed(kind, message);
         Self {
             turn,

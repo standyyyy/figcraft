@@ -62,10 +62,12 @@ impl Limits {
     }
 }
 
-/// What the UI learns about a turn, in order.
+/// What the UI learns while a turn runs. **Progress only.**
 ///
-/// Exactly one terminal event ([`Committed`](Self::Committed), [`Failed`](Self::Failed) or
-/// [`Cancelled`](Self::Cancelled)) ends a turn; the UI can rely on that to settle its state.
+/// How a turn *ends* is [`TurnTerminal`](crate::TurnTerminal) and nothing else. The two were once
+/// folded together -- a `Committed`/`Failed`/`Cancelled` event beside a separate terminal slot --
+/// which allowed a turn to look ended in one place and unfinished in another, and made "is this
+/// stale?" answerable two different ways. A progress event now carries no opinion about the outcome.
 #[derive(Clone, Debug, PartialEq)]
 pub enum AgentEvent {
     /// A turn started.
@@ -76,16 +78,10 @@ pub enum AgentEvent {
     ToolStarted { turn: u64, name: String },
     /// A tool call finished (`ok` false: its result was a tool error, which the model still sees).
     ToolFinished { turn: u64, name: String, ok: bool },
-    /// The turn's edits became one undo step.
-    Committed { turn: u64, undo_label: String },
-    /// The turn failed; nothing reached the document.
-    Failed { turn: u64, kind: AgentErrorKind, message: String },
-    /// The turn was cancelled; nothing reached the document.
-    Cancelled { turn: u64 },
     /// A non-fatal diagnostic: something was adjusted to let the turn continue.
     ///
-    /// Not a failure and not terminal. The panel shows it so a person knows the Agent saw a shortened
-    /// history, rather than wondering why it forgot an earlier turn.
+    /// Not a failure and not an ending. The panel shows it so a person knows the Agent saw a
+    /// shortened history, rather than wondering why it forgot an earlier turn.
     Notice { turn: u64, message: String },
 }
 
@@ -97,16 +93,8 @@ impl AgentEvent {
             | AgentEvent::TextDelta { turn, .. }
             | AgentEvent::ToolStarted { turn, .. }
             | AgentEvent::ToolFinished { turn, .. }
-            | AgentEvent::Committed { turn, .. }
-            | AgentEvent::Failed { turn, .. }
-            | AgentEvent::Cancelled { turn }
             | AgentEvent::Notice { turn, .. } => *turn,
         }
-    }
-
-    /// Whether this event ends the turn.
-    pub fn is_terminal(&self) -> bool {
-        matches!(self, AgentEvent::Committed { .. } | AgentEvent::Failed { .. } | AgentEvent::Cancelled { .. })
     }
 }
 
@@ -167,8 +155,17 @@ pub struct ToolCall {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Outcome {
+    /// The model answered and changed nothing: a read-only turn.
+    ///
+    /// Distinct from [`Committed`](Self::Committed) because the two are different facts. Reporting a
+    /// read-only turn as committed would claim an undo entry that does not exist.
+    Completed,
     /// Its edits became one undo step.
     Committed,
+    /// The model answered but its edits were not applied: the document moved on, it was the wrong
+    /// file, or the batch rolled back. The transcript records this so the next turn does not assume
+    /// the rejected edits landed.
+    Conflict,
     /// It failed.
     Failed,
     /// It was cancelled.
@@ -218,19 +215,24 @@ impl AgentRun {
         }
     }
 
-    /// Apply one event, so the persisted run and the UI cannot disagree.
+    /// Apply one progress event, so the persisted run and the UI cannot disagree.
+    ///
+    /// Progress only: how the turn ended comes from [`settle`](Self::settle), because a run that
+    /// records an outcome from a progress event could disagree with the terminal the host delivers.
     pub fn apply(&mut self, event: &AgentEvent, limits: &Limits) {
         match event {
             AgentEvent::Started { .. } => {}
             AgentEvent::TextDelta { text, .. } => self.push_text(text, limits),
             AgentEvent::ToolStarted { .. } => {}
             AgentEvent::ToolFinished { name, ok, .. } => self.push_tool(name, *ok),
-            AgentEvent::Committed { .. } => self.finish(Outcome::Committed),
-            AgentEvent::Failed { .. } => self.finish(Outcome::Failed),
-            AgentEvent::Cancelled { .. } => self.finish(Outcome::Cancelled),
             // A diagnostic is not progress and not an ending: the run's record is unchanged.
             AgentEvent::Notice { .. } => {}
         }
+    }
+
+    /// Record how the turn ended, from the one value that says so.
+    pub fn settle(&mut self, terminal: &crate::TurnTerminal) {
+        self.finish(terminal.outcome());
     }
 }
 
@@ -258,7 +260,7 @@ impl RetryPolicy {
     }
 }
 
-/// Why a turn stopped early, for the event a caller emits.
-pub fn failure_event(turn: u64, error: &crate::AgentError) -> AgentEvent {
-    AgentEvent::Failed { turn, kind: error.kind, message: error.message.clone() }
+/// Why a turn stopped early, as the terminal a host delivers.
+pub fn failure_terminal(turn: u64, error: &crate::AgentError) -> crate::TurnTerminal {
+    crate::TurnTerminal::Failed { turn, kind: error.kind, message: error.message.clone() }
 }

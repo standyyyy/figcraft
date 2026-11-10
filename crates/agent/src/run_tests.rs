@@ -1,10 +1,25 @@
 //! The turn lifecycle: events, limits, cancellation, retry and reopening a saved run.
 
 use crate::AgentErrorKind;
-use crate::run::{AgentEvent, AgentRun, CancelToken, Limits, Outcome, RetryPolicy, ToolCall, failure_event};
+use crate::run::{AgentEvent, AgentRun, CancelToken, Limits, Outcome, RetryPolicy, ToolCall, failure_terminal};
+
+/// A success that committed one replay step.
+fn committed_terminal(turn: u64) -> crate::TurnTerminal {
+    let envelope = crate::CommitEnvelope::new(
+        turn,
+        1,
+        1,
+        vec![crate::shadow::ReplayStep { command: "node.create".into(), params: serde_json::json!({"type": "rectangle"}) }],
+        "AI: x",
+    );
+    crate::TurnTerminal::Success { turn, answer: String::new(), commit: Some(envelope), continuation: Vec::new() }
+}
 
 #[test]
-fn a_turn_emits_events_in_order_and_exactly_one_terminal_event() {
+fn progress_events_carry_no_ending_of_their_own() {
+    // The defect this pins: a `Committed`/`Failed`/`Cancelled` event beside a separate terminal slot
+    // let a turn look ended in one place and unfinished in another. Progress now has no opinion about
+    // the outcome, so every event that exists is progress and the turn has exactly one ending.
     let turn = 7;
     let events = [
         AgentEvent::Started { turn },
@@ -12,35 +27,31 @@ fn a_turn_emits_events_in_order_and_exactly_one_terminal_event() {
         AgentEvent::ToolStarted { turn, name: "create_node".into() },
         AgentEvent::ToolFinished { turn, name: "create_node".into(), ok: true },
         AgentEvent::TextDelta { turn, text: "done.".into() },
-        AgentEvent::Committed { turn, undo_label: "AI: draw".into() },
+        AgentEvent::Notice { turn, message: "history shortened".into() },
     ];
     assert!(events.first().is_some_and(|e| matches!(e, AgentEvent::Started { .. })), "a turn starts first");
-    let terminal: Vec<&AgentEvent> = events.iter().filter(|e| e.is_terminal()).collect();
-    assert_eq!(terminal.len(), 1, "exactly one terminal event");
-    assert!(matches!(terminal[0], AgentEvent::Committed { .. }));
     assert!(events.iter().all(|e| e.turn() == turn), "every event carries the turn");
-    // Nothing follows the terminal event.
-    let last = events.last().expect("last");
-    assert!(last.is_terminal());
+    // `AgentEvent` has no `is_terminal`: the type cannot express an ending, which is the guarantee.
 }
 
 #[test]
-fn every_kind_of_ending_is_terminal() {
-    for event in [
-        AgentEvent::Committed { turn: 1, undo_label: "AI: x".into() },
-        AgentEvent::Failed { turn: 1, kind: AgentErrorKind::Timeout, message: "slow".into() },
-        AgentEvent::Cancelled { turn: 1 },
-    ] {
-        assert!(event.is_terminal(), "{event:?} ends the turn");
+fn every_kind_of_ending_is_a_terminal_and_only_one_can_carry_an_envelope() {
+    use crate::TurnTerminal;
+    let endings = [
+        TurnTerminal::Success { turn: 1, answer: "x".into(), commit: None, continuation: Vec::new() },
+        TurnTerminal::Failed { turn: 1, kind: AgentErrorKind::Timeout, message: "slow".into() },
+        TurnTerminal::Cancelled { turn: 1 },
+        TurnTerminal::LimitReached { turn: 1, kind: AgentErrorKind::Model, message: "rounds".into() },
+    ];
+    assert_eq!(endings.len(), 4, "every ending has a variant");
+    assert_eq!(endings.iter().filter(|t| t.commit().is_some()).count(), 0, "none of these carries an envelope");
+    for terminal in &endings {
+        assert_eq!(terminal.turn(), 1, "each names its turn");
     }
-    for event in [
-        AgentEvent::Started { turn: 1 },
-        AgentEvent::TextDelta { turn: 1, text: "x".into() },
-        AgentEvent::ToolStarted { turn: 1, name: "t".into() },
-        AgentEvent::ToolFinished { turn: 1, name: "t".into(), ok: true },
-    ] {
-        assert!(!event.is_terminal(), "{event:?} does not end the turn");
-    }
+    // The transcript outcome comes from the terminal, so the two cannot disagree.
+    assert_eq!(endings[0].outcome(), Outcome::Completed, "a read-only success completed");
+    assert_eq!(endings[1].outcome(), Outcome::Failed);
+    assert_eq!(endings[2].outcome(), Outcome::Cancelled);
 }
 
 #[test]
@@ -57,17 +68,17 @@ fn cancellation_is_idempotent_and_readable_from_any_clone() {
 }
 
 #[test]
-fn a_cancelled_turn_produces_one_cancelled_event_and_no_commit() {
+fn a_cancelled_turn_records_cancelled_and_a_late_success_cannot_change_it() {
     let mut run = AgentRun::new(3, "draw a card");
     let limits = Limits::default();
     run.apply(&AgentEvent::Started { turn: 3 }, &limits);
     run.apply(&AgentEvent::TextDelta { turn: 3, text: "working".into() }, &limits);
     // The user stops it before any commit.
-    run.apply(&AgentEvent::Cancelled { turn: 3 }, &limits);
+    run.settle(&crate::TurnTerminal::Cancelled { turn: 3 });
     assert_eq!(run.outcome, Some(Outcome::Cancelled));
     assert_eq!(run.answer, "working", "the text so far is kept for the transcript");
     // A late response after cancellation is ignored: the outcome does not flip.
-    run.apply(&AgentEvent::Committed { turn: 3, undo_label: "AI: late".into() }, &limits);
+    run.settle(&crate::TurnTerminal::Success { turn: 3, answer: "late".into(), commit: None, continuation: Vec::new() });
     assert_eq!(run.outcome, Some(Outcome::Cancelled), "a late commit cannot un-cancel a turn");
     assert!(matches!(run.outcome, Some(Outcome::Cancelled)));
 }
@@ -78,7 +89,7 @@ fn a_turn_that_was_cancelled_after_shadow_edits_still_commits_nothing() {
     // contract the caller relies on: a cancelled run has no Committed outcome ever.
     let mut run = AgentRun::new(1, "x");
     run.apply(&AgentEvent::ToolFinished { turn: 1, name: "create_node".into(), ok: true }, &Limits::default());
-    run.apply(&AgentEvent::Cancelled { turn: 1 }, &Limits::default());
+    run.settle(&crate::TurnTerminal::Cancelled { turn: 1 });
     assert_eq!(run.outcome, Some(Outcome::Cancelled));
     assert_eq!(run.tools.len(), 1, "the tool that did run is recorded, for the transcript");
 }
@@ -92,7 +103,7 @@ fn a_tool_failure_is_recorded_and_the_turn_can_still_succeed() {
     run.apply(&AgentEvent::ToolFinished { turn: 1, name: "create_node".into(), ok: false }, &limits);
     assert!(run.is_running(), "a tool error does not end the turn");
     run.apply(&AgentEvent::ToolFinished { turn: 1, name: "create_node".into(), ok: true }, &limits);
-    run.apply(&AgentEvent::Committed { turn: 1, undo_label: "AI: x".into() }, &limits);
+    run.settle(&committed_terminal(1));
     assert_eq!(run.outcome, Some(Outcome::Committed));
     assert_eq!(
         run.tools,
@@ -189,7 +200,7 @@ fn a_finished_run_round_trips_through_json() {
     let mut run = AgentRun::new(4, "make a card");
     run.apply(&AgentEvent::TextDelta { turn: 4, text: "ok".into() }, &limits);
     run.apply(&AgentEvent::ToolFinished { turn: 4, name: "create_node".into(), ok: true }, &limits);
-    run.apply(&AgentEvent::Committed { turn: 4, undo_label: "AI: make a card".into() }, &limits);
+    run.settle(&committed_terminal(4));
 
     let json = serde_json::to_string(&run).expect("serialize");
     let back: AgentRun = serde_json::from_str(&json).expect("deserialize");
@@ -208,18 +219,19 @@ fn a_finished_run_does_not_become_interrupted() {
 }
 
 #[test]
-fn a_failure_event_carries_the_classified_kind_and_message() {
+fn a_failure_terminal_carries_the_classified_kind_and_message() {
     let e = crate::AgentError::new(AgentErrorKind::Timeout, "the provider did not answer in 120 s");
-    let event = failure_event(9, &e);
-    match &event {
-        AgentEvent::Failed { turn, kind, message } => {
+    let terminal = failure_terminal(9, &e);
+    match &terminal {
+        crate::TurnTerminal::Failed { turn, kind, message, .. } => {
             assert_eq!(*turn, 9);
             assert_eq!(*kind, AgentErrorKind::Timeout);
             assert!(message.contains("120 s"));
         }
         other => panic!("expected Failed, got {other:?}"),
     }
-    assert!(event.is_terminal());
+    assert!(terminal.commit().is_none(), "a failure carries no envelope");
+    assert_eq!(terminal.outcome(), Outcome::Failed, "and the transcript agrees");
 }
 
 #[test]
@@ -253,25 +265,23 @@ fn the_default_limits_bound_every_runaway_dimension() {
 }
 
 #[test]
-fn a_turn_stopped_by_a_limit_still_keeps_what_it_built() {
-    // What this pins: a request for a whole screen used its rounds, and the worker's Stopped arm
-    // dropped the shadow -- 14 tool calls of work, an empty canvas, and a person watching with
-    // nothing to show. A stopped turn is cut short, not wasted: its edits are committed and the
-    // panel is told it was cut short.
+fn a_turn_stopped_by_a_limit_keeps_its_record_but_applies_nothing() {
+    // A limit is not a failure of the model's work so far, and it is not a finished turn either. The
+    // transcript keeps what the turn did -- so a person can see the work and the reason -- while the
+    // document is untouched, because a turn cut short is not one the user agreed to.
     use crate::run::{AgentEvent, AgentRun, Limits, Outcome};
     let limits = Limits::default();
     let mut run = AgentRun::new(1, "build the sidebar");
     run.apply(&AgentEvent::ToolFinished { turn: 1, name: "batch".into(), ok: true }, &limits);
-    run.apply(
-        &AgentEvent::Failed {
-            turn: 1,
-            kind: crate::AgentErrorKind::Model,
-            message: "the turn used its rounds; the part it completed is kept".into(),
-        },
-        &limits,
-    );
-    assert_eq!(run.outcome, Some(Outcome::Failed), "a cut-short turn reports the limit");
+    let terminal = crate::TurnTerminal::LimitReached {
+        turn: 1,
+        kind: crate::AgentErrorKind::Model,
+        message: "the turn used its rounds".into(),
+    };
+    run.settle(&terminal);
+    assert_eq!(run.outcome, Some(Outcome::Failed), "a cut-short turn records that it did not finish");
     assert_eq!(run.tools.len(), 1, "what it built is on the record");
+    assert!(terminal.commit().is_none(), "and nothing may be applied");
 }
 
 #[test]

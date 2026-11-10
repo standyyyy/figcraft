@@ -73,7 +73,7 @@ fn an_unreachable_provider_fails_with_a_classified_kind() {
     }
     // The turn was started and then failed: a Started event, and no Committed one.
     assert!(events.iter().any(|e| matches!(e, AgentEvent::Started { .. })), "the turn started");
-    assert!(!events.iter().any(|e| matches!(e, AgentEvent::Committed { .. })), "nothing committed");
+    assert!(terminal.commit().is_none(), "nothing committed");
 }
 
 #[test]

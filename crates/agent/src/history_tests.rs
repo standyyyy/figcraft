@@ -8,11 +8,22 @@ fn limits() -> Limits {
     Limits::default()
 }
 
+/// A success envelope with one replay step, for tests that need a committed turn.
+fn committed_envelope(turn: u64) -> crate::CommitEnvelope {
+    crate::CommitEnvelope::new(
+        turn,
+        1,
+        1,
+        vec![crate::shadow::ReplayStep { command: "node.create".into(), params: serde_json::json!({"type": "rectangle"}) }],
+        "AI: q",
+    )
+}
+
 fn run_with(turn: u64, request: &str, answer: &str) -> AgentRun {
     let limits = limits();
     let mut run = AgentRun::new(turn, request);
     run.apply(&AgentEvent::TextDelta { turn, text: answer.into() }, &limits);
-    run.apply(&AgentEvent::Committed { turn, undo_label: "AI: x".into() }, &limits);
+    run.settle(&crate::TurnTerminal::Success { turn, answer: answer.into(), commit: Some(committed_envelope(turn)), continuation: Vec::new() });
     run
 }
 
@@ -23,7 +34,10 @@ fn a_conversation_records_turns_in_order() {
     for turn in 1..=3 {
         c.apply(&AgentEvent::Started { turn }, "q", &limits);
         c.apply(&AgentEvent::TextDelta { turn, text: format!("a{turn}") }, "q", &limits);
-        c.apply(&AgentEvent::Committed { turn, undo_label: "AI: q".into() }, "q", &limits);
+        c.settle(
+            &crate::TurnTerminal::Success { turn, answer: format!("a{turn}"), commit: Some(committed_envelope(turn)), continuation: Vec::new() },
+            "q",
+        );
     }
     assert_eq!(c.turns.len(), 3);
     assert_eq!(c.turns.iter().map(|r| r.turn).collect::<Vec<_>>(), [1, 2, 3]);
@@ -142,10 +156,10 @@ fn the_summary_records_how_each_turn_ended() {
     let mut c = Conversation::new("c1");
     let limits = limits();
     let mut failed = AgentRun::new(1, "broke");
-    failed.apply(&AgentEvent::Failed { turn: 1, kind: crate::AgentErrorKind::Timeout, message: "slow".into() }, &limits);
+    failed.settle(&crate::TurnTerminal::Failed { turn: 1, kind: crate::AgentErrorKind::Timeout, message: "slow".into() });
     c.push(failed);
     let mut cancelled = AgentRun::new(2, "stopped");
-    cancelled.apply(&AgentEvent::Cancelled { turn: 2 }, &limits);
+    cancelled.settle(&crate::TurnTerminal::Cancelled { turn: 2 });
     c.push(cancelled);
     c.push(run_with(3, "kept", "a"));
 

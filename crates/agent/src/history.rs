@@ -48,6 +48,24 @@ impl Conversation {
         self.turns.push(run);
     }
 
+    /// Record how a turn ended, on the turn it names.
+    ///
+    /// The terminal is the one value that says so, so the transcript cannot disagree with what the
+    /// host delivered. A terminal for a turn this conversation does not have is still recorded: a
+    /// reopened file may hold a turn whose start was saved and whose ending was not.
+    pub fn settle(&mut self, terminal: &crate::TurnTerminal, request: &str) -> &mut AgentRun {
+        let turn = terminal.turn();
+        if let Some(i) = self.turns.iter().position(|r| r.turn == turn) {
+            self.turns[i].settle(terminal);
+            return &mut self.turns[i];
+        }
+        let mut run = AgentRun::new(turn, request);
+        run.settle(terminal);
+        self.turns.push(run);
+        let last = self.turns.len() - 1;
+        &mut self.turns[last]
+    }
+
     /// Apply an event to the turn it names, creating the turn if it is new.
     pub fn apply(&mut self, event: &AgentEvent, request: &str, limits: &Limits) -> &mut AgentRun {
         let turn = event.turn();
@@ -210,7 +228,10 @@ fn summary_of(previous: &Option<String>, removed: &[AgentRun]) -> String {
     for run in removed {
         let request = run.request.split_whitespace().collect::<Vec<_>>().join(" ");
         let outcome = match run.outcome {
-            Some(Outcome::Committed) => "",
+            // A turn that completed or committed did what it was asked; the summary does not need to
+            // distinguish them, and saying "committed" of a read-only turn would be wrong.
+            Some(Outcome::Completed | Outcome::Committed) => "",
+            Some(Outcome::Conflict) => " (not applied: the document changed)",
             Some(Outcome::Failed) => " (failed)",
             Some(Outcome::Cancelled) => " (cancelled)",
             Some(Outcome::Interrupted) => " (interrupted)",

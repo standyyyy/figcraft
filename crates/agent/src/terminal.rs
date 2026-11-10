@@ -115,6 +115,20 @@ impl TurnTerminal {
         }
     }
 
+    /// The transcript outcome this terminal means.
+    ///
+    /// Kept here rather than in the UI so the transcript and the terminal cannot disagree about what
+    /// happened: one value decides both.
+    pub fn outcome(&self) -> crate::run::Outcome {
+        match self {
+            TurnTerminal::Success { commit: Some(_), .. } => crate::run::Outcome::Committed,
+            // A read-only success completed without changing anything.
+            TurnTerminal::Success { commit: None, .. } => crate::run::Outcome::Completed,
+            TurnTerminal::Failed { .. } | TurnTerminal::LimitReached { .. } => crate::run::Outcome::Failed,
+            TurnTerminal::Cancelled { .. } => crate::run::Outcome::Cancelled,
+        }
+    }
+
     /// Whether the turn ended well.
     pub fn is_success(&self) -> bool {
         matches!(self, TurnTerminal::Success { .. })

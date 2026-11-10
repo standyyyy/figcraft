@@ -107,6 +107,16 @@ pub struct DocState {
     pub(crate) rotation_origin: Option<rotation_origin::RotationOrigin>,
     /// The View toggles the preferences keep were applied ([`Session::apply_view_prefs`]).
     pub(crate) view_from_prefs: bool,
+    /// The Agent conversation transcript stored with this file.
+    ///
+    /// Kept out of `Document`, `History`, collaboration changes and branch patches: a conversation
+    /// is not a design edit, so it adds no undo entry and is never merged. It travels with the
+    /// `.figcraft` archive as its own member and marks the file dirty when it changes.
+    pub agent: figcraft_format::agent::AgentData,
+    /// The transcript as of the last successful save: what a dirty check compares against.
+    pub(crate) saved_agent: figcraft_format::agent::AgentData,
+    /// Whether the transcript differs from the saved baseline.
+    pub(crate) agent_changed: bool,
     /// The last duplicate while its copies are the selection: Duplicate repeats its offset (see
     /// [`cmd::edit::Duplicated`]; not saved).
     pub(crate) last_duplicate: Option<cmd::edit::Duplicated>,
@@ -175,6 +185,9 @@ impl DocState {
             guide: None,
             rotation_origin: None,
             view_from_prefs: false,
+            agent: figcraft_format::agent::AgentData::default(),
+            saved_agent: figcraft_format::agent::AgentData::default(),
+            agent_changed: false,
             last_duplicate: None,
             images_left_in_file: None,
             on_disk: None,
@@ -208,6 +221,17 @@ impl DocState {
     /// With the version history read from its file.
     pub fn with_versions(mut self, versions: Vec<figcraft_format::Version>) -> Self {
         self.versions = versions;
+        self
+    }
+
+    /// With the Agent transcript read from its file.
+    ///
+    /// A transcript that arrived is the saved baseline: opening a file is not an edit, and an
+    /// in-progress turn from a previous session is settled by the caller before this.
+    pub fn with_agent(mut self, agent: figcraft_format::agent::AgentData) -> Self {
+        self.saved_agent = agent.clone();
+        self.agent = agent;
+        self.agent_changed = false;
         self
     }
 
@@ -256,7 +280,30 @@ impl DocState {
     }
 
     pub fn is_dirty(&self) -> bool {
-        !Arc::ptr_eq(self.document_itself(), &self.saved_doc) || self.versions_changed
+        !Arc::ptr_eq(self.document_itself(), &self.saved_doc) || self.versions_changed || self.agent_changed
+    }
+
+    /// The Agent transcript stored with this file.
+    pub fn agent(&self) -> &figcraft_format::agent::AgentData {
+        &self.agent
+    }
+
+    /// Replace the transcript, marking the file dirty when it actually changed.
+    ///
+    /// A conversation is not a design edit: this adds no undo entry and is not merged into another
+    /// file, but it does travel with the archive, so an unsaved change must show as unsaved.
+    pub fn set_agent(&mut self, data: figcraft_format::agent::AgentData) {
+        if self.agent == data {
+            return;
+        }
+        self.agent_changed = self.agent != data && data != self.saved_agent;
+        self.agent = data;
+    }
+
+    /// Settle a save: the transcript now matches the file.
+    pub fn mark_agent_saved(&mut self) {
+        self.saved_agent = self.agent.clone();
+        self.agent_changed = false;
     }
 
     /// Show `version` in place of the document (or switch to it from another preview).
@@ -304,6 +351,7 @@ impl DocState {
     pub fn mark_saved(&mut self) {
         self.saved_doc = self.doc.clone();
         self.versions_changed = false;
+        self.mark_agent_saved();
     }
 
     pub fn doc_mut(&mut self) -> &mut Document {

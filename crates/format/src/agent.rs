@@ -31,6 +31,14 @@ pub struct AgentData {
     pub json: Value,
 }
 
+impl Default for AgentData {
+    /// No transcript. `Value::Null` rather than an empty object: `is_empty` accepts both, and a null
+    /// is what a file without the member reads as.
+    fn default() -> Self {
+        Self { json: Value::Null }
+    }
+}
+
 impl AgentData {
     /// Wrap `json` as a transcript.
     pub fn new(json: Value) -> Self {

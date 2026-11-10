@@ -1204,3 +1204,26 @@ mod tests {
         assert!(add_image(&mut Document::new("x"), b"zzz".to_vec()).is_err());
     }
 }
+
+/// Helpers for tests in other crates that need a deliberately damaged archive.
+///
+/// Writing zip entries is this crate's API, so a test that wants a corrupt `agent/conversations.json`
+/// asks here rather than hand-building an archive.
+pub mod tests_support {
+    use super::{Document, FormatError, agent, io_err, json_options, put_json};
+
+    /// A minimal `.figcraft` archive whose transcript member holds `bytes` verbatim.
+    pub fn archive_with_transcript_bytes(bytes: &[u8]) -> Result<Vec<u8>, FormatError> {
+        let mut doc = Document::default();
+        doc.repair();
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let mut z = zip::ZipWriter::new(&mut buf);
+            put_json(&mut z, "document.json", &doc)?;
+            z.start_file(agent::AGENT_MEMBER, json_options()).map_err(io_err)?;
+            std::io::Write::write_all(&mut z, bytes).map_err(io_err)?;
+            z.finish().map_err(io_err)?;
+        }
+        Ok(buf.into_inner())
+    }
+}

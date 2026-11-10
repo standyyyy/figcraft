@@ -447,9 +447,12 @@ impl TurnDriver {
                     self.answer.push_str(&text);
                     self.events.push(AgentEvent::TextDelta { turn: self.turn, text });
                 }
-                // A model's scratchpad. Explicitly dropped: Rig keeps it in its own variant, so this
-                // arm exists to say it is not an answer rather than to filter a string.
-                StreamEvent::Reasoning { .. } => {}
+                // A model's scratchpad, kept in its own stream so it cannot be mistaken for the
+                // answer. It goes to the panel as reasoning, never as text: a person can watch how
+                // the model got there, and the transcript records only what it concluded.
+                StreamEvent::Reasoning { text, .. } => {
+                    self.events.push(AgentEvent::ReasoningDelta { turn: self.turn, text });
+                }
                 _ => {}
             },
             MultiTurnStreamItem::ToolCall { tool_call } => {

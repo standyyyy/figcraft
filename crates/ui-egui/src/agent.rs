@@ -8,7 +8,7 @@
 //! is what `ui.inspect` reports, so a status dump never leaks a transcript or a credential.
 
 use figcraft_agent::history::{Conversation, Transcript};
-use figcraft_agent::run::{AgentEvent, AgentRun, CancelToken, Limits, Outcome};
+use figcraft_agent::run::{AgentEvent, AgentRun, CancelToken, Limits, Outcome, ToolCall};
 use figcraft_doc::RequirementsDocument;
 use serde_json::{Value, json};
 
@@ -40,13 +40,6 @@ pub enum RunStatus {
     Conflict,
 }
 
-/// One line of tool activity, as the transcript shows it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ToolRow {
-    pub name: String,
-    pub ok: bool,
-}
-
 /// The Agent panel's display state for one document.
 #[derive(Clone, Debug)]
 pub struct AgentPanel {
@@ -61,9 +54,17 @@ pub struct AgentPanel {
     /// What the current turn is doing.
     pub status: RunStatus,
     /// The tool activity of the current turn, in order.
-    pub tools: Vec<ToolRow>,
+    pub tools: Vec<ToolCall>,
     /// Non-fatal diagnostics from the running turn, newest last (a shortened history, say).
     pub notices: Vec<String>,
+    /// The running turn's reasoning, streamed.
+    ///
+    /// Working material, not the answer: shown so a person can see how the model got there, kept out
+    /// of the transcript so a later turn does not continue from someone else's notes.
+    pub reasoning: String,
+    /// Whether the reasoning pane is open. Collapsed by default: most turns do not need it, and it is
+    /// the longest text on screen when open.
+    pub show_reasoning: bool,
     /// The error text of the last failure, with the action to take.
     pub error: Option<String>,
     /// The undo label the last commit used (shown so a person can find the step).
@@ -196,6 +197,8 @@ impl AgentPanel {
             status: RunStatus::Idle,
             tools: Vec::new(),
             notices: Vec::new(),
+            reasoning: String::new(),
+            show_reasoning: false,
             error: None,
             last_undo_label: None,
             editing: None,
@@ -219,6 +222,8 @@ impl AgentPanel {
         self.current = Some(AgentRun::new(turn, request));
         self.status = RunStatus::Streaming;
         self.tools.clear();
+        self.notices.clear();
+        self.reasoning.clear();
         self.error = None;
         self.last_undo_label = None;
         self.export_note = None;
@@ -285,6 +290,15 @@ impl AgentPanel {
     pub fn apply(&mut self, event: &AgentEvent, limits: &Limits) {
         match event {
             AgentEvent::Started { .. } => self.status = RunStatus::Streaming,
+            // Reasoning grows while the model works; it is not the answer and does not touch the run.
+            AgentEvent::ReasoningDelta { text, .. } => {
+                self.reasoning.push_str(text);
+                // Bounded: a long deliberation must not grow the buffer without limit.
+                if self.reasoning.chars().count() > 16_384 {
+                    let keep: String = self.reasoning.chars().skip(self.reasoning.chars().count() - 16_384).collect();
+                    self.reasoning = keep;
+                }
+            }
             AgentEvent::TextDelta { .. } => {
                 if let Some(run) = self.current.as_mut() {
                     run.apply(event, limits);
@@ -293,13 +307,13 @@ impl AgentPanel {
             }
             AgentEvent::ToolStarted { name, .. } => {
                 self.status = RunStatus::Tool;
-                self.tools.push(ToolRow { name: name.clone(), ok: false });
+                self.tools.push(ToolCall { name: name.clone(), ok: false });
             }
             AgentEvent::ToolFinished { name, ok, .. } => {
                 if let Some(last) = self.tools.iter_mut().rev().find(|r| &r.name == name) {
                     last.ok = *ok;
                 } else {
-                    self.tools.push(ToolRow { name: name.clone(), ok: *ok });
+                    self.tools.push(ToolCall { name: name.clone(), ok: *ok });
                 }
                 if let Some(run) = self.current.as_mut() {
                     run.apply(event, limits);
@@ -692,51 +706,51 @@ fn draw_chat(ui: &mut Ui, state: &mut AgentPanel, input: &PanelInput, t: &Tokens
         );
     }
 
-    // Finished turns: the request, then the answer.
+    // Finished turns, newest last: each one a request and the answer it produced.
     for run in &input.chat.runs {
-        y = draw_message(ui, t, transcript, y, &run.request, true);
-        if !run.answer.is_empty() {
-            y = draw_message(ui, t, transcript, y, &run.answer, false);
-        }
+        y = draw_turn(ui, t, transcript, y, run, false);
         if y > transcript.max.y {
             break;
         }
     }
-    // The running turn's answer, streamed.
-    if let Some(run) = state.current.as_ref().filter(|r| !r.answer.is_empty()) {
-        y = draw_message(ui, t, transcript, y, &run.answer, false);
+
+    // The turn in flight: its reasoning (collapsible), its answer as it streams, and its tools.
+    if let Some(run) = state.current.clone() {
+        let running = state.is_running();
+        // Reasoning first: it is what the model was doing before it had an answer, so it reads in the
+        // order it happened.
+        if !state.reasoning.is_empty() {
+            y = draw_reasoning(ui, state, t, transcript, y);
+        }
+        if !run.answer.is_empty() {
+            y = draw_message(ui, t, transcript, y, &run.answer, false);
+        }
+        y = draw_tools(ui, t, transcript, y, &state.tools, running);
+    } else if !state.tools.is_empty() {
+        // A finished turn whose record was settled: its tools are still worth showing.
+        y = draw_tools(ui, t, transcript, y, &state.tools, false);
     }
-    // Tool activity, compact: one row per call.
-    for row in &state.tools {
-        if y + 18.0 > transcript.max.y {
+    // Notices: something was adjusted to let the turn continue (a shortened history, say).
+    for note in &state.notices {
+        if y + 16.0 > transcript.max.y {
             break;
         }
-        let r = Rect::from_min_size(pos2(transcript.min.x + 12.0, y), vec2(transcript.width() - 24.0, 18.0));
-        ui.painter().rect_filled(r, CornerRadius::same(4), t.field);
-        let mark = if row.ok { "✓" } else { "…" };
-        ui.painter().text(
-            pos2(r.min.x + 6.0, r.center().y),
-            Align2::LEFT_CENTER,
-            mark,
-            crate::theme::regular(10.0),
-            if row.ok { t.accent_text } else { t.text_tertiary },
-        );
-        ui.painter().text(pos2(r.min.x + 20.0, r.center().y), Align2::LEFT_CENTER, &row.name, crate::theme::regular(10.0), t.text_secondary);
-        y += 22.0;
+        let text = widgets::elide_font(ui, note, transcript.width() - 40.0, crate::theme::regular(9.5));
+        ui.painter().text(pos2(transcript.min.x + 14.0, y + 7.0), Align2::LEFT_CENTER, text, crate::theme::regular(9.5), t.text_tertiary);
+        y += 16.0;
     }
     // The error, with the action the runtime classified.
     if let Some(error) = &state.error {
-        let h = 40.0;
+        let text = widgets::elide_font(ui, error, transcript.width() - 40.0, crate::theme::regular(10.0));
+        let w = transcript.width() - 24.0;
+        let h = 34.0;
         if y + h <= transcript.max.y {
-            let r = Rect::from_min_size(pos2(transcript.min.x + 12.0, y), vec2(transcript.width() - 24.0, h));
+            let r = Rect::from_min_size(pos2(transcript.min.x + 12.0, y), vec2(w, h));
+            // A tinted band rather than a grey box: an error should look like one.
             ui.painter().rect_filled(r, CornerRadius::same(6), t.field);
-            ui.painter().text(
-                pos2(r.min.x + 8.0, r.min.y + 10.0),
-                Align2::LEFT_CENTER,
-                widgets::elide_font(ui, error, r.width() - 16.0, crate::theme::regular(10.0)),
-                crate::theme::regular(10.0),
-                t.text,
-            );
+            ui.painter().rect_stroke(r, CornerRadius::same(6), Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
+            ui.painter().text(pos2(r.min.x + 9.0, r.center().y), Align2::LEFT_CENTER, text, crate::theme::regular(10.0), t.text);
+            let _ = h;
         }
     }
     // The last undo label, so the step can be found in the history.
@@ -824,14 +838,111 @@ fn draw_message(ui: &mut Ui, t: &Tokens, area: Rect, y: f32, text: &str, mine: b
     if y + h > area.max.y {
         return area.max.y + 1.0;
     }
-    let x = area.min.x + 12.0;
+    // The request sits on the right, where the person's own words belong; the answer on the left. The
+    // two alignments are what makes a conversation readable as one, and it costs one line of geometry.
+    let x = if mine { area.max.x - 12.0 - w } else { area.min.x + 12.0 };
     let r = Rect::from_min_size(pos2(x, y), vec2(w, h));
-    ui.painter().rect_filled(r, CornerRadius::same(6), if mine { t.field } else { t.panel });
-    if !mine {
-        ui.painter().rect_stroke(r, CornerRadius::same(6), Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+    if mine {
+        // The person's words: a tinted bubble, no border. It is theirs, not the tool's output.
+        ui.painter().rect_filled(r, CornerRadius { nw: 8, ne: 8, sw: 8, se: 2 }, t.field);
+        ui.painter().text(pos2(r.min.x + pad, r.min.y + pad), Align2::LEFT_TOP, &shown, font, t.text);
+    } else {
+        // The answer: on the surface, with a hairline border. No fill, so a long answer does not read
+        // as a wall of tint.
+        ui.painter().rect_filled(r, CornerRadius { nw: 8, ne: 8, sw: 2, se: 8 }, t.panel);
+        ui.painter().rect_stroke(r, CornerRadius { nw: 8, ne: 8, sw: 2, se: 8 }, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+        ui.painter().text(pos2(r.min.x + pad, r.min.y + pad), Align2::LEFT_TOP, &shown, font, t.text);
     }
-    ui.painter().text(pos2(r.min.x + pad, r.min.y + pad), Align2::LEFT_TOP, &shown, font, if mine { t.text_secondary } else { t.text });
     y + h + 8.0
+}
+
+/// One finished turn: the request on the right, the answer on the left, and its tools between.
+fn draw_turn(ui: &mut Ui, t: &Tokens, area: Rect, y: f32, run: &AgentRun, running: bool) -> f32 {
+    let mut y = draw_message(ui, t, area, y, &run.request, true);
+    y = draw_tools(ui, t, area, y, &run.tools, running);
+    if !run.answer.is_empty() {
+        y = draw_message(ui, t, area, y, &run.answer, false);
+    }
+    // The outcome, as a quiet line: a turn that did not commit says so without shouting.
+    if let Some(outcome) = run.outcome {
+        let (label, colour) = match outcome {
+            Outcome::Committed => (crate::i18n::tr("Applied · one undo step"), t.text_tertiary),
+            Outcome::Completed => (crate::i18n::tr("Answered · no changes"), t.text_tertiary),
+            Outcome::Conflict => (crate::i18n::tr("Not applied · the file changed"), t.accent),
+            Outcome::Failed => (crate::i18n::tr("Failed"), t.accent),
+            Outcome::Cancelled => (crate::i18n::tr("Stopped"), t.text_tertiary),
+            Outcome::Interrupted => (crate::i18n::tr("Interrupted"), t.text_tertiary),
+        };
+        if y + 14.0 <= area.max.y {
+            ui.painter().text(pos2(area.min.x + 14.0, y + 6.0), Align2::LEFT_CENTER, label, crate::theme::regular(9.0), colour);
+            y += 16.0;
+        }
+    }
+    y + 4.0
+}
+
+/// The model's reasoning, streamed live, behind a disclosure.
+///
+/// Collapsed by default: it is the longest text on screen, and most of the time a person wants the
+/// result. Open, it is clearly not the answer -- small, muted, marked "Thinking" -- so it can be read
+/// without being mistaken for the reply.
+fn draw_reasoning(ui: &mut Ui, state: &mut AgentPanel, t: &Tokens, area: Rect, y: f32) -> f32 {
+    let head = Rect::from_min_size(pos2(area.min.x + 12.0, y), vec2(area.width() - 24.0, 18.0));
+    let arrow = if state.show_reasoning { "▾" } else { "▸" };
+    let label = format!("{arrow}  {}", crate::i18n::tr("Thinking"));
+    let resp = ui.interact(head, Id::unique("agent-reasoning"), Sense::click()).tip(crate::i18n::tr("Show how the model got there"));
+    ui.painter().text(pos2(head.min.x + 2.0, head.center().y), Align2::LEFT_CENTER, label, crate::theme::regular(9.5), t.text_tertiary);
+    if resp.clicked() {
+        state.show_reasoning = !state.show_reasoning;
+    }
+    let y = y + 20.0;
+    if !state.show_reasoning {
+        return y;
+    }
+    // Bounded so a long deliberation cannot push the answer off screen.
+    let room = ((area.max.y - y - 40.0) / 13.0).max(0.0) as usize;
+    let text: String = state.reasoning.chars().rev().take(room * 90).collect::<Vec<_>>().into_iter().rev().collect();
+    let font = crate::theme::regular(9.5);
+    let shown = widgets::elide_font(ui, &text, area.width() - 44.0, font.clone());
+    let lines = ((shown.chars().count() as f32 * 5.2) / (area.width() - 44.0)).ceil().max(1.0).min(room as f32);
+    let h = lines * 13.0 + 12.0;
+    if y + h > area.max.y - 8.0 {
+        return area.max.y;
+    }
+    let r = Rect::from_min_size(pos2(area.min.x + 12.0, y), vec2(area.width() - 24.0, h));
+    // A quiet well, not a bubble: it is context, not a message.
+    ui.painter().rect_filled(r, CornerRadius::same(6), t.field);
+    ui.painter().text(pos2(r.min.x + 8.0, r.min.y + 6.0), Align2::LEFT_TOP, shown, font, t.text_tertiary);
+    y + h + 8.0
+}
+
+/// A turn's tool calls, as one compact strip each.
+fn draw_tools(ui: &mut Ui, t: &Tokens, area: Rect, y: f32, tools: &[ToolCall], running: bool) -> f32 {
+    if tools.is_empty() {
+        return y;
+    }
+    let mut y = y;
+    for (i, row) in tools.iter().enumerate() {
+        if y + 16.0 > area.max.y {
+            break;
+        }
+        let is_last = i + 1 == tools.len();
+        let r = Rect::from_min_size(pos2(area.min.x + 12.0, y), vec2(area.width() - 24.0, 16.0));
+        // The tool strip is quieter than a message: it happened, it is not something to read.
+        ui.painter().rect_filled(r, CornerRadius::same(4), t.field);
+        let mark = if !row.ok {
+            "·"
+        } else if running && is_last {
+            "◐"
+        } else {
+            "✓"
+        };
+        let colour = if row.ok { t.accent_text } else { t.text_tertiary };
+        ui.painter().text(pos2(r.min.x + 6.0, r.center().y), Align2::LEFT_CENTER, mark, crate::theme::regular(9.0), colour);
+        ui.painter().text(pos2(r.min.x + 18.0, r.center().y), Align2::LEFT_CENTER, &row.name, crate::theme::regular(9.0), t.text_secondary);
+        y += 18.0;
+    }
+    y + 2.0
 }
 
 /// The Requirements tab: the list, or one document's fields.

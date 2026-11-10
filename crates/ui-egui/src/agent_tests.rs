@@ -1155,3 +1155,75 @@ fn a_stale_terminal_changes_no_transcript_record_for_the_current_turn() {
 
     assert_eq!(recorded_outcome(&app, newer), None, "the newer turn is untouched");
 }
+
+// ---------- reasoning is shown, never recorded ----------
+
+#[test]
+fn reasoning_streams_into_the_panel_but_not_the_transcript() {
+    // What the person asked for: see how the model got there. What must not happen: the scratchpad
+    // becoming part of the conversation a later turn continues from.
+    let mut app = harness_with(true);
+    app.ui.agent_host = Some(Box::new(TerminalHost(None)));
+    app.ui.agent_requests.push(Request::Send { request: "draw".into() });
+    crate::agent::perform_requests(&mut app);
+    let turn = app.ui.agent_turn;
+
+    let l = limits();
+    {
+        let panel = app.ui.agent.as_mut().expect("panel");
+        panel.apply(&AgentEvent::ReasoningDelta { turn, text: "First a frame, then ".into() }, &l);
+        panel.apply(&AgentEvent::ReasoningDelta { turn, text: "the rows.".into() }, &l);
+        assert_eq!(panel.reasoning, "First a frame, then the rows.", "the panel holds the reasoning");
+        assert!(!panel.show_reasoning, "collapsed by default: the answer is what most turns are for");
+    }
+    // The answer the panel will record: a turn's own answer arrives as text, not as reasoning.
+    if let Some(panel) = app.ui.agent.as_mut() {
+        panel.apply(&AgentEvent::TextDelta { turn, text: "Built it.".into() }, &l);
+    }
+
+    // Settle the turn and record it: the reasoning must not appear in the run.
+    app.ui.agent_host = Some(Box::new(TerminalHost(Some(figcraft_agent::TurnTerminal::Success {
+        turn,
+        answer: "Built it.".into(),
+        commit: None,
+        continuation: Vec::new(),
+    }))));
+    crate::agent::poll_host(&mut app);
+
+    let run = app.ui.agent_transcript.conversations.iter().flat_map(|c| c.turns.iter()).find(|r| r.turn == turn);
+    let recorded = run.expect("the turn was recorded");
+    assert_eq!(recorded.answer, "Built it.", "the answer is recorded");
+    assert!(!format!("{recorded:?}").contains("First a frame"), "the reasoning is not: {:?}", recorded);
+}
+
+#[test]
+fn a_new_turn_clears_the_previous_reasoning() {
+    // Otherwise a new turn opens showing the last one's thinking, which reads as its own.
+    let mut app = harness_with(true);
+    app.ui.agent_host = Some(Box::new(TerminalHost(None)));
+    app.ui.agent_requests.push(Request::Send { request: "first".into() });
+    crate::agent::perform_requests(&mut app);
+    let first = app.ui.agent_turn;
+    let l = limits();
+    {
+        let panel = app.ui.agent.as_mut().expect("panel");
+        panel.apply(&AgentEvent::ReasoningDelta { turn: first, text: "old thinking".into() }, &l);
+        assert!(!panel.reasoning.is_empty());
+    }
+
+    app.ui.agent_requests.push(Request::Send { request: "second".into() });
+    crate::agent::perform_requests(&mut app);
+    assert_eq!(app.ui.agent.as_ref().map(|p| p.reasoning.as_str()), Some(""), "the new turn starts clean");
+}
+
+#[test]
+fn the_reasoning_pane_toggles() {
+    // A disclosure, so a person can open it, read it and put it away without losing the answer.
+    let mut app = harness_with(true);
+    {
+        let panel = app.ui.agent.as_mut().expect("panel");
+        assert!(!panel.show_reasoning, "closed by default");
+        panel.show_reasoning = true;
+        assert!(panel.show_reasoning);
+    }
+}

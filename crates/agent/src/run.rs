@@ -80,6 +80,13 @@ pub enum AgentEvent {
     ToolStarted { turn: u64, name: String },
     /// A tool call finished (`ok` false: its result was a tool error, which the model still sees).
     ToolFinished { turn: u64, name: String, ok: bool },
+    /// A piece of the model's reasoning, for a person who wants to see how it got there.
+    ///
+    /// Kept separate from [`TextDelta`](Self::TextDelta) so nothing can mistake it for the answer, and
+    /// **not** recorded in the transcript: a scratchpad is working material, not part of the
+    /// conversation that a later turn should continue from. The panel shows it while the turn runs and
+    /// can collapse it; reopening the file shows the answers, not the thinking.
+    ReasoningDelta { turn: u64, text: String },
     /// A non-fatal diagnostic: something was adjusted to let the turn continue.
     ///
     /// Not a failure and not an ending. The panel shows it so a person knows the Agent saw a
@@ -95,6 +102,7 @@ impl AgentEvent {
             | AgentEvent::TextDelta { turn, .. }
             | AgentEvent::ToolStarted { turn, .. }
             | AgentEvent::ToolFinished { turn, .. }
+            | AgentEvent::ReasoningDelta { turn, .. }
             | AgentEvent::Notice { turn, .. } => *turn,
         }
     }
@@ -296,6 +304,10 @@ impl AgentRun {
             AgentEvent::TextDelta { text, .. } => self.push_text(text, limits),
             AgentEvent::ToolStarted { .. } => {}
             AgentEvent::ToolFinished { name, ok, .. } => self.push_tool(name, *ok),
+            // Reasoning is working material, not part of the conversation: the transcript records what
+            // the model concluded, not how it got there. A later turn continuing from a scratchpad would
+            // be re-reading someone else's notes.
+            AgentEvent::ReasoningDelta { .. } => {}
             // A diagnostic is not progress and not an ending: the run's record is unchanged.
             AgentEvent::Notice { .. } => {}
         }

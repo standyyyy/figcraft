@@ -23,6 +23,24 @@ pub(crate) fn finite_check_candidates(doc: &Document, before: &Document) -> Vec<
     doc.changed_ids(before, usize::MAX).unwrap_or_default()
 }
 
+/// Whether `id` must move the revision without editing the document.
+///
+/// These bump the revision on purpose, and they are the exceptions that are *not* edits: a pan must not
+/// make the CJK name scan re-read every layer, and a document switch must invalidate a prepared save.
+/// Written down rather than inferred, so a new read-only command is silent by default.
+fn counts_as_change(id: &str) -> bool {
+    matches!(
+        id,
+        // Panning, zooming and fitting the canvas: the CJK name scan keys on the revision to decide
+        // whether it must re-read every layer name, and a pan must not trigger that.
+        "view.set" | "view.zoom" | "view.zoomAt" | "view.zoomToFit" | "view.pan" | "view.center"
+            | "view.panels" | "view.minimize" | "canvas.fit"
+            // Switching or managing documents: a prepared save holds the revision it was built at, so a
+            // switch has to move it or that save could commit into the wrong document.
+            | "doc.switch" | "doc.close" | "doc.activate"
+    )
+}
+
 impl Session {
     /// Append a live event with the active document's identity (nothing without one). Inside a
     /// [`Session::grouped`] call the event is buffered and committed only when the group succeeds.
@@ -255,8 +273,15 @@ impl Session {
         // the panel reads `requirements.list` every frame, so a turn that ran for minutes always found
         // a revision that had moved on -- and its edits were refused no matter what the user did. A
         // command that changed nothing changed nothing.
-        if edit {
+        // The revision says "something a reader should notice changed". An edit always does; so does a
+        // view command, because the CJK name scan keys on it to decide whether it must re-read every
+        // name (it must not, on a pan). A pure query -- `requirements.list`, run once per frame by the
+        // Agent panel -- must not, or the Agent's commit gate (which compares the revision a turn was
+        // built from against the live one) refuses every turn that takes longer than one frame.
+        if edit || counts_as_change(spec.id) {
             ds.revision += 1;
+        }
+        if edit {
             self.record(uid, spec.history.then_some(spec.label), bdoc, bsel, bpage);
         }
     }

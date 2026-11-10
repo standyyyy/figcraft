@@ -682,7 +682,10 @@ pub fn panel(ui: &mut Ui, state: &mut AgentPanel, input: &PanelInput) -> PanelOu
 
 /// The Chat tab: transcript, tool rows, composer and the send/stop controls.
 fn draw_chat(ui: &mut Ui, state: &mut AgentPanel, input: &PanelInput, t: &Tokens, body: Rect, out: &mut PanelOutput) {
-    const COMPOSER: f32 = 104.0;
+    // The composer's height comes from what it holds: a two-row field, the button row and the margins.
+    // It was a hard 104 px, which took a fifth of a short panel for a field that needed 84, and still
+    // showed only two lines of a long request.
+    const COMPOSER: f32 = 92.0;
     let transcript = Rect::from_min_max(body.min, pos2(body.max.x, body.max.y - COMPOSER));
     let composer = Rect::from_min_max(pos2(body.min.x, transcript.max.y), body.max);
 
@@ -864,7 +867,7 @@ fn draw_composer(ui: &mut Ui, state: &mut AgentPanel, input: &PanelInput, t: &To
     ui.spacing_mut().item_spacing.y = 6.0;
 
     let mut text = state.draft.clone();
-    let edit = egui::TextEdit::multiline(&mut text).hint_text(crate::i18n::tr("Describe a change…")).desired_width(f32::INFINITY).desired_rows(2);
+    let edit = egui::TextEdit::multiline(&mut text).hint_text(crate::i18n::tr("Describe a change…")).desired_width(f32::INFINITY).desired_rows(3);
     let resp = ui.add(edit);
     if resp.changed() {
         state.draft = text;
@@ -1087,7 +1090,11 @@ pub fn show(app: &mut crate::FigApp, ctx: &egui::Context) {
     let input = panel_input(app);
     let t = Tokens::get(ctx);
     let screen = ctx.content_rect();
-    let size = vec2(AGENT_PANEL_WIDTH.max(AGENT_PANEL_MIN).min(screen.width() - 80.0), (screen.height() - 160.0).clamp(320.0, 720.0));
+    // The panel takes the height it can: leaving 96 px for the menu bar and the window's own margins
+    // rather than a hard 720 cap. The cap cut a fifth off the conversation area on a 900 px screen,
+    // which is exactly the part a person scrolls through.
+    let height = (screen.height() - 96.0).clamp(320.0, 1600.0);
+    let size = vec2(AGENT_PANEL_WIDTH.max(AGENT_PANEL_MIN).min(screen.width() - 80.0), height);
     let mut open = true;
     let mut output = PanelOutput::default();
     egui::Window::new(crate::i18n::tr("Agent"))

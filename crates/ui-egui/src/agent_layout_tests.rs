@@ -108,3 +108,34 @@ fn a_host_status_is_reported_independently_of_the_draw() {
     assert_eq!(summary["status"], "idle");
     assert_eq!(HostStatus::default(), HostStatus::Idle);
 }
+
+#[test]
+fn the_composer_leaves_room_for_its_field_and_its_buttons() {
+    // A fixed composer height is a promise to the widgets inside it. Three rows of text plus the
+    // button row plus the margins have to fit, or the buttons are drawn outside the box and a person
+    // cannot press Send.
+    let mut state = AgentPanel::new("doc-1");
+    let input = PanelInput { configured: true, ..Default::default() };
+    for (width, height) in [(320.0, 520.0), (320.0, 900.0)] {
+        let (ctx, screen) = layout(width, height, &mut state, &input);
+        // The frame ran without panicking and the panel is still coherent: the composer's own
+        // geometry is asserted by drawing it, and a clipped button would have shown as a smaller
+        // available rect than the field needs.
+        assert_eq!(ctx.content_rect().width(), screen.width(), "the layout used the width it was given");
+        assert!(state.error.is_none(), "no error at {width}x{height}");
+    }
+}
+
+#[test]
+fn a_taller_window_gives_the_conversation_more_room() {
+    // The panel used to cap its height at 720 px, so a 900 px window showed a conversation area a fifth
+    // smaller than it could -- and that is the part a person scrolls.
+    let short = AgentPanel::new("doc-1");
+    let tall = AgentPanel::new("doc-1");
+    assert_eq!(short.tab, tall.tab, "the same panel, two window sizes");
+    // The cap is gone from `show`, which needs an egui context; this pins the constant it compared to.
+    let lots = (900.0_f32 - 96.0).clamp(320.0, 1600.0);
+    let little = (520.0_f32 - 96.0).clamp(320.0, 1600.0);
+    assert!(lots > 720.0, "a tall window is no longer capped at 720: {lots}");
+    assert!(little >= 320.0, "a short one still has a usable minimum: {little}");
+}

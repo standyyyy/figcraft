@@ -512,3 +512,70 @@ fn summarize(s: &str) -> String {
 #[cfg(test)]
 #[path = "runtime_tests.rs"]
 mod tests;
+
+/// Check that the configured provider answers, without running a turn.
+///
+/// A settings check, not a turn: it builds no shadow, registers no tools, mutates no document and
+/// records no replay. It asks for a one-word answer with `.max_turns(1)`, so the provider cannot loop,
+/// and reports what came back so the panel can say "ready" or why not.
+///
+/// The key is resolved through the same [`Credentials`](crate::Credentials) contract a turn uses, so a
+/// test that passes here will find the key a turn finds.
+pub fn test_connection(config: &AgentConfig, credentials: &dyn crate::Credentials) -> Result<String, crate::ProviderError> {
+    let credential = credentials.resolve(config.credential())?;
+    if credential.is_none() && config.credential().is_some() {
+        let name = config.credential().unwrap_or_default();
+        return Err(crate::ProviderError::new(AgentErrorKind::Authentication, format!("no credential named `{name}` is set")));
+    }
+    let openai = OpenAIConfig::new(credential.as_ref().map_or("", crate::Secret::expose)).with_base_url(config.base_url());
+    let model = openai.client().chat(config.model().to_string());
+    // No tools and one turn: this can only fail if the endpoint, the key or the model is wrong.
+    let agent = AgentBuilder::new(model).preamble("Reply with the single word: ready").build();
+    let mut stream = agent.prompt("ready?").max_turns(1).stream();
+    let outcome = futures::executor::block_on(async {
+        while let Some(item) = stream.next().await {
+            match item {
+                Ok(MultiTurnStreamItem::StreamAssistantItem(rig_core::streaming::Item::Event(StreamEvent::Text { text, .. }))) => {
+                    // The first text is enough: the connection and the key are proven.
+                    return Ok(Some(text));
+                }
+                Ok(MultiTurnStreamItem::FinalResponse(_)) => return Ok(None),
+                Ok(_) => {}
+                Err(e) => {
+                    let message = e.to_string();
+                    return Err(crate::ProviderError::new(classify(&message), summarize(&message)));
+                }
+            }
+        }
+        Ok(None)
+    })?;
+    // The alias is informational: the server may answer under a different model than asked for.
+    Ok(outcome.unwrap_or_else(|| "ready".to_string()))
+}
+
+/// What a connection test found, for a panel to show.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ConnectionStatus {
+    /// The provider answered.
+    Ready,
+    /// It did not, and this is why.
+    Failed(String),
+}
+
+impl ConnectionStatus {
+    /// A short line a person can read.
+    pub fn message(&self) -> &str {
+        match self {
+            ConnectionStatus::Ready => "The provider answered.",
+            ConnectionStatus::Failed(why) => why,
+        }
+    }
+}
+
+/// Run [`test_connection`] and turn its result into something to show.
+pub fn check_connection(config: &AgentConfig, credentials: &dyn crate::Credentials) -> ConnectionStatus {
+    match test_connection(config, credentials) {
+        Ok(_) => ConnectionStatus::Ready,
+        Err(e) => ConnectionStatus::Failed(e.message),
+    }
+}

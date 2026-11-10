@@ -360,3 +360,35 @@ fn a_requirements_document_is_written_through_document_local_commands() {
     assert!(markdown.contains('#'), "it has headings");
     assert!(markdown.len() > 80, "it is a document, not a title: {markdown}");
 }
+
+#[test]
+#[ignore = "needs FIGCRAFT_AGENT_LIVE_URL and FIGCRAFT_AGENT_LIVE_MODEL; set them to run against a real endpoint"]
+fn a_connection_test_proves_the_endpoint_without_running_a_turn() {
+    // The settings check: it must reach the provider and report ready, and it must not need a shadow
+    // or a document at all.
+    let Some((config, credential)) = live_config() else {
+        eprintln!("skipped: set FIGCRAFT_AGENT_LIVE_URL and FIGCRAFT_AGENT_LIVE_MODEL to run this");
+        return;
+    };
+    let credentials = live_credentials(&credential);
+    let status = figcraft_agent::runtime::check_connection(&config, &credentials);
+    println!("live: connection test says {:?}", status.message());
+    assert!(matches!(status, figcraft_agent::runtime::ConnectionStatus::Ready), "the endpoint answered: {status:?}");
+}
+
+#[test]
+#[ignore = "needs FIGCRAFT_AGENT_LIVE_URL and FIGCRAFT_AGENT_LIVE_MODEL; set them to run against a real endpoint"]
+fn the_model_alias_is_accepted_not_validated() {
+    // A server may answer under a different model than asked for (an alias, a routing layer). The
+    // plan says that is informational: the turn uses what the server says and does not refuse.
+    let Some((config, _credential)) = live_config() else {
+        eprintln!("skipped: set FIGCRAFT_AGENT_LIVE_URL and FIGCRAFT_AGENT_LIVE_MODEL to run this");
+        return;
+    };
+    let asked = config.model().to_string();
+    let mut events = Vec::new();
+    let terminal =
+        run(turn(config, "Reply with exactly: OK", CancelToken::new()), shadow(), &live_credentials(&_credential), &mut |e| events.push(e));
+    assert!(matches!(terminal, TurnTerminal::Success { .. }), "the turn succeeded under whatever model answered: {terminal:?}");
+    println!("live: asked for `{asked}`, the turn succeeded regardless of the alias");
+}

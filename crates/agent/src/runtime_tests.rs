@@ -195,3 +195,54 @@ fn a_driver_that_could_not_start_reports_a_terminal_and_no_replay() {
     let terminal = driver.finish();
     assert!(terminal.commit().is_none(), "a failure carries no envelope");
 }
+
+// ---------- the settings check ----------
+
+#[test]
+fn a_connection_test_against_an_unreachable_provider_fails_with_the_cause() {
+    // A settings check, not a turn: it must report why, and it must not need a shadow.
+    let mut prefs = figcraft_engine::prefs::AgentPrefs {
+        enabled: true,
+        base_url: "http://127.0.0.1:1".into(),
+        model: "m".into(),
+        timeout_seconds: 10,
+        ..figcraft_engine::prefs::AgentPrefs::default()
+    };
+    prefs.enabled = true;
+    let config = AgentConfig::from_prefs(&prefs).expect("valid");
+    let status = crate::runtime::check_connection(&config, &figcraft_agent_env());
+    match status {
+        crate::runtime::ConnectionStatus::Failed(why) => {
+            assert!(!why.is_empty(), "it says why");
+            println!("connection test failed with: {why}");
+        }
+        crate::runtime::ConnectionStatus::Ready => panic!("nothing listens on port 1"),
+    }
+}
+
+#[test]
+fn a_connection_test_with_a_missing_credential_says_so_without_a_request() {
+    // The key is resolved through the same contract a turn uses, so a missing one is caught here and
+    // not after a request the provider would refuse.
+    let prefs = figcraft_engine::prefs::AgentPrefs {
+        enabled: true,
+        base_url: "http://127.0.0.1:1".into(),
+        model: "m".into(),
+        credential: Some("FIGCRAFT_DEFINITELY_NOT_SET_XYZ".into()),
+        timeout_seconds: 10,
+        ..figcraft_engine::prefs::AgentPrefs::default()
+    };
+    let config = AgentConfig::from_prefs(&prefs).expect("valid");
+    match crate::runtime::check_connection(&config, &figcraft_agent_env()) {
+        crate::runtime::ConnectionStatus::Failed(why) => {
+            assert!(why.contains("credential"), "the cause is the missing key: {why}");
+            assert!(why.contains("FIGCRAFT_DEFINITELY_NOT_SET_XYZ"), "and it names the variable: {why}");
+        }
+        crate::runtime::ConnectionStatus::Ready => panic!("a missing key is not ready"),
+    }
+}
+
+/// The host's credential resolver, as the desktop uses.
+fn figcraft_agent_env() -> crate::EnvironmentCredentials {
+    crate::EnvironmentCredentials
+}

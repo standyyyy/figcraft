@@ -284,6 +284,7 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
             ui.add_space(6.0);
             crate::widgets::label(ui, tr("Agent"), t.text);
             let agent = prefs.agent.clone();
+            let mut connection: Option<String> = None;
             if crate::widgets::checkbox(ui, agent.enabled, tr("Enable the in-app Agent")) {
                 app.run("pref.agent", json!({"enabled": !agent.enabled}));
             }
@@ -320,6 +321,21 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
             }
             if !provider.as_object().is_some_and(|o| o.is_empty()) {
                 app.run("pref.agent", provider);
+            }
+            // Test the endpoint without running a turn: no shadow, no tools, no document change.
+            if agent.enabled {
+                ui.horizontal(|ui| {
+                    let label = crate::i18n::tr("Test connection");
+                    if crate::widgets::button(ui, label, false, !agent.base_url.trim().is_empty()).clicked()
+                        && let Ok(config) = figcraft_agent::AgentConfig::from_prefs(&agent)
+                    {
+                        let status = figcraft_agent::runtime::check_connection(&config, &figcraft_agent::EnvironmentCredentials);
+                        connection = Some(status.message().to_string());
+                    }
+                    if let Some(note) = &connection {
+                        ui.label(note);
+                    }
+                });
             }
             // What the settings amount to, so a mistake is visible here rather than at the first turn.
             match figcraft_agent::AgentConfig::from_prefs(&agent) {

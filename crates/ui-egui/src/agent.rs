@@ -247,6 +247,9 @@ impl AgentPanel {
             "canSend": self.can_send(),
             "tools": self.tools.len(),
             "hasError": self.error.is_some(),
+            // The message itself: "conflict" with no reason leaves a person with nothing to do, and a
+            // bug report with nothing to diagnose.
+            "error": self.error,
             "editingRequirements": self.editing.is_some(),
         })
     }

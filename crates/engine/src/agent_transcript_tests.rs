@@ -157,3 +157,38 @@ fn a_transcript_member_that_cannot_be_read_is_reported_without_losing_the_design
     assert!(!loaded.issues.is_empty(), "and the reader said why: {:?}", loaded.issues);
     assert!(!loaded.doc.pages.is_empty(), "the design document survived");
 }
+
+#[test]
+fn a_read_only_command_does_not_move_the_revision() {
+    // The bug this pins: `after_command` bumped the revision for *every* command, read-only ones
+    // included. The Agent's commit gate compares the revision the turn was built from against the live
+    // one, and the panel reads `requirements.list` once per frame -- so a turn that ran for minutes
+    // always found the revision had moved, and its edits were refused however carefully the user
+    // behaved. A command that changed nothing changed nothing.
+    let mut s = Session::new();
+    s.execute("file.new", &json!({})).expect("file.new");
+    s.execute("requirements.upsert", &json!({"title": "PRD", "requirements": [{"title": "a"}]})).expect("create");
+    let before = s.ds().expect("doc").revision;
+
+    for _ in 0..20 {
+        s.execute("requirements.list", &json!({})).expect("list");
+    }
+    assert_eq!(s.ds().expect("doc").revision, before, "twenty reads are not an edit");
+
+    // A command that really changes the document still moves it.
+    s.execute("node.create", &json!({"type": "rectangle", "width": 10.0, "height": 10.0})).expect("create");
+    assert!(s.ds().expect("doc").revision > before, "a real edit moves the revision");
+}
+
+#[test]
+fn reading_does_not_add_an_undo_entry_either() {
+    // The same rule oiled the undo history: a read must not become something to undo.
+    let mut s = Session::new();
+    s.execute("file.new", &json!({})).expect("file.new");
+    let depth = s.undo_depth();
+    for _ in 0..20 {
+        s.execute("requirements.list", &json!({})).expect("list");
+        s.execute("requirements.get", &json!({"title": "missing"})).ok();
+    }
+    assert_eq!(s.undo_depth(), depth, "reads are not undo steps");
+}

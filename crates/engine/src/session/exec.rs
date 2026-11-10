@@ -250,8 +250,13 @@ impl Session {
         let Some(ds) = self.docs.iter_mut().find(|d| d.uid == uid) else { return };
         let edit = !Arc::ptr_eq(&ds.doc, &bdoc) && ds.interaction.is_none();
         ds.clean_selection();
-        ds.revision += 1;
+        // The revision says "the document changed", and it is what the Agent's commit gate compares
+        // before applying a replay. Bumping it for a read-only command made that comparison useless:
+        // the panel reads `requirements.list` every frame, so a turn that ran for minutes always found
+        // a revision that had moved on -- and its edits were refused no matter what the user did. A
+        // command that changed nothing changed nothing.
         if edit {
+            ds.revision += 1;
             self.record(uid, spec.history.then_some(spec.label), bdoc, bsel, bpage);
         }
     }

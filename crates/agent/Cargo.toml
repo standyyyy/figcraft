@@ -12,6 +12,7 @@ workspace = true
 figcraft-agent-tools = { workspace = true }
 figcraft-engine = { workspace = true }
 figcraft-doc = { workspace = true }
+figcraft-format = { workspace = true }
 rig-agent = { workspace = true }
 rig-core = { workspace = true }
 serde = { workspace = true }

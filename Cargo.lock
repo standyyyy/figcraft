@@ -1857,6 +1857,7 @@ dependencies = [
  "figcraft-agent-tools",
  "figcraft-doc",
  "figcraft-engine",
+ "figcraft-format",
  "log",
  "rig-agent",
  "rig-core",

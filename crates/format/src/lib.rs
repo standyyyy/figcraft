@@ -77,6 +77,8 @@ const IMAGE_BUDGET: ImageBudget = ImageBudget { images: 20_000, bytes: 4 * 1024 
 const MAX_UNPACKED: u64 = 6 * 1024 * 1024 * 1024;
 #[cfg(target_pointer_width = "32")]
 const MAX_UNPACKED: u64 = 2 * 1024 * 1024 * 1024;
+pub mod agent;
+
 const BRANCH_INDEX: &str = "branches/index.json";
 /// Most branches a file keeps: making more is refused, extra entries in a file are skipped.
 pub const MAX_BRANCHES: usize = 100;
@@ -210,11 +212,14 @@ pub struct Loaded {
     pub versions: Vec<Version>,
     pub branches: Vec<Branch>,
     pub images_past_budget: usize,
+    /// The Agent conversation transcript, if the file carried one. Opaque here: the Agent owns its
+    /// shape, and this crate only caps and carries it.
+    pub agent: Option<agent::AgentData>,
 }
 
 impl From<Document> for Loaded {
     fn from(doc: Document) -> Self {
-        Self { doc, issues: Vec::new(), versions: Vec::new(), branches: Vec::new(), images_past_budget: 0 }
+        Self { doc, issues: Vec::new(), versions: Vec::new(), branches: Vec::new(), images_past_budget: 0, agent: None }
     }
 }
 
@@ -588,6 +593,20 @@ pub fn save_bytes_with_history(
     versions: &[Version],
     branches: &[Branch],
 ) -> Result<Vec<u8>, FormatError> {
+    save_bytes_full(doc, thumbnail_png, versions, branches, None)
+}
+
+/// Write a `.figcraft` archive with a history, branches and the Agent's transcript to bytes.
+///
+/// The transcript is metadata beside the document, never part of it: it does not enter undo history
+/// or a live session, and a reader that does not know the member ignores it.
+pub fn save_bytes_full(
+    doc: &Document,
+    thumbnail_png: Option<&[u8]>,
+    versions: &[Version],
+    branches: &[Branch],
+    agent: Option<&agent::AgentData>,
+) -> Result<Vec<u8>, FormatError> {
     let mut buf = std::io::Cursor::new(Vec::new());
     {
         let mut z = zip::ZipWriter::new(&mut buf);
@@ -623,6 +642,12 @@ pub fn save_bytes_with_history(
         }
         if let Some(lib) = &doc.published {
             library::write(&mut z, lib, &written)?;
+        }
+        // The Agent transcript, when there is something to keep. An empty one writes no member, so a
+        // file that never used the Agent carries nothing extra.
+        if let Some(data) = agent.filter(|d| !d.is_empty()) {
+            let bytes = data.to_bytes()?;
+            put(&mut z, agent::AGENT_MEMBER, json_options(), &bytes)?;
         }
         z.finish().map_err(io_err)?;
     }
@@ -766,6 +791,27 @@ pub(crate) fn load_limited(bytes: &[u8], budget: ImageBudget, total: u64) -> Res
     let mut budget = MAX_VERSION_BYTES;
     let versions = read_versions(&mut z, "versions", &images, &mut issues, &mut budget, &mut unpacked);
     let branches = read_branches(&mut z, &images, &mut issues, &mut unpacked);
+    // The transcript is file metadata, not document data: a damaged one is skipped with an issue so
+    // the document still opens.
+    let agent = match z.by_name(agent::AGENT_MEMBER) {
+        Ok(mut f) => {
+            let mut bytes = Vec::new();
+            match std::io::Read::read_to_end(&mut f, &mut bytes) {
+                Ok(_) => match agent::AgentData::from_bytes(&bytes) {
+                    Ok(a) => Some(a),
+                    Err(e) => {
+                        issues.push(format!("the Agent transcript was skipped: {e}"));
+                        None
+                    }
+                },
+                Err(e) => {
+                    issues.push(format!("the Agent transcript could not be read: {e}"));
+                    None
+                }
+            }
+        }
+        Err(_) => None,
+    };
     // Images only the version history or branches use stay with them.
     let branch_images =
         branches.iter().flat_map(|b| b.base.images.keys().chain(b.head.images.keys()).chain(b.versions.iter().flat_map(|v| v.images().keys())));
@@ -776,7 +822,7 @@ pub(crate) fn load_limited(bytes: &[u8], budget: ImageBudget, total: u64) -> Res
         .filter(|h| own_images.as_ref().is_some_and(|o| !o.contains(*h)))
         .collect();
     doc.images = images.into_iter().filter(|(h, _)| !history_only.contains(h)).collect();
-    Ok(Loaded { doc, issues, versions, branches, images_past_budget })
+    Ok(Loaded { doc, issues, versions, branches, images_past_budget, agent })
 }
 
 /// The archive's `images/` members by hash, within `budget`, and the ones that couldn't be read
@@ -1066,6 +1112,8 @@ pub fn load_file(path: &std::path::Path) -> Result<(Document, Vec<String>), Form
     load_bytes(&bytes)
 }
 
+#[cfg(test)]
+mod agent_tests;
 #[cfg(test)]
 mod branch_tests;
 #[cfg(test)]

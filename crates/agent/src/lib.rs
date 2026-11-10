@@ -13,6 +13,7 @@
 pub mod config;
 pub mod run;
 pub mod gateway;
+pub mod history;
 pub mod shadow;
 pub mod tools;
 
@@ -23,6 +24,10 @@ mod gateway_tests;
 #[cfg(test)]
 #[path = "shadow_tests.rs"]
 mod shadow_tests;
+
+#[cfg(test)]
+#[path = "history_tests.rs"]
+mod history_tests;
 
 #[cfg(test)]
 #[path = "run_tests.rs"]

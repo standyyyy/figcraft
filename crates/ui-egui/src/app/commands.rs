@@ -132,6 +132,19 @@ impl FigApp {
                 "dialog.createFromColor" => crate::sampled_color::request(self, &r.data),
                 "panel.shortcuts" => self.ui.shortcuts_panel = !self.ui.shortcuts_panel,
                 // The in-app Agent panel: a toggle, so a keyboard shortcut or the palette can reach it.
+                // Straight to the requirements tab: the documents are Agent-produced, but reaching them
+                // should not require opening the Agent and then finding a tab.
+                "panel.requirements" => match self.ui.agent.take() {
+                    Some(mut panel) => {
+                        panel.tab = agent::AgentTab::Requirements;
+                        self.ui.agent = Some(panel);
+                    }
+                    None => {
+                        let mut panel = agent::AgentPanel::new(agent::conversation_id(self.session.ds().map(|d| d.uid).unwrap_or(0)));
+                        panel.tab = agent::AgentTab::Requirements;
+                        self.ui.agent = Some(panel);
+                    }
+                },
                 "panel.agent" => match self.ui.agent.take() {
                     Some(_) => {}
                     None => {

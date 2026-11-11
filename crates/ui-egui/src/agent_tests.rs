@@ -1296,3 +1296,53 @@ fn applying_a_refused_replay_lands_it_as_one_undo_step() {
     assert!(panel.recoverable.is_none(), "the offer is spent");
     assert!(panel.error.is_none(), "and the error is cleared");
 }
+
+// ---------- the requirements documents are reachable ----------
+
+#[test]
+fn the_requirements_panel_opens_on_its_own_tab() {
+    // The documents are Agent-produced, but reaching them used to need opening the Agent and then
+    // finding a second tab -- which is why a written document read as missing.
+    let mut app = harness_with(true);
+    app.ui.agent = None;
+    app.run("view.requirements", serde_json::json!({}));
+    let panel = app.ui.agent.as_ref().expect("the panel opened");
+    assert_eq!(panel.tab, AgentTab::Requirements, "on the requirements tab");
+}
+
+#[test]
+fn a_written_document_is_named_in_the_panel() {
+    // A turn that writes a PRD answers "写好了"; naming the document and offering to open it is the
+    // difference between a feature and a mystery.
+    let mut app = harness_with(true);
+    let (uid, revision) = current(&app);
+    app.ui.agent_host = Some(Box::new(TerminalHost(None)));
+    app.ui.agent_requests.push(Request::Send { request: "write a prd".into() });
+    crate::agent::perform_requests(&mut app);
+    let turn = app.ui.agent_turn;
+
+    let step = figcraft_agent::shadow::ReplayStep {
+        command: "requirements.upsert".into(),
+        params: serde_json::json!({"title": "Sidebar", "requirements": [{"title": "a"}]}),
+    };
+    let envelope = figcraft_agent::CommitEnvelope::new(turn, uid, revision, vec![step], "AI: write a prd");
+    app.ui.agent_host = Some(Box::new(TerminalHost(Some(figcraft_agent::TurnTerminal::Success {
+        turn,
+        answer: "写好了".into(),
+        commit: Some(envelope),
+        continuation: Vec::new(),
+    }))));
+    crate::agent::poll_host(&mut app);
+
+    let panel = app.ui.agent.as_ref().expect("panel");
+    assert!(panel.wrote_requirements.is_some(), "the panel says it wrote one");
+    assert_eq!(panel.status, RunStatus::Done, "and the turn committed");
+}
+
+#[test]
+fn showing_requirements_switches_the_tab() {
+    let mut app = harness_with(true);
+    app.ui.agent_requests.push(Request::ShowRequirements);
+    crate::agent::perform_requests(&mut app);
+    assert_eq!(app.ui.agent.as_ref().map(|p| p.tab), Some(AgentTab::Requirements));
+}

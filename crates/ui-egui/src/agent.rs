@@ -1072,39 +1072,49 @@ fn draw_requirements(ui: &mut Ui, state: &mut AgentPanel, input: &PanelInput, t:
         return;
     }
 
-    // The list.
+    // The list, with what each document holds: a row that says only "14 · 47" makes the person open
+    // every one to find what they are after.
     if input.requirements.documents.is_empty() {
-        ui.painter().text(
-            pos2(body.center().x, body.min.y + 48.0),
-            Align2::CENTER_CENTER,
-            crate::i18n::tr("No requirements yet"),
-            crate::theme::regular(12.0),
-            t.text_tertiary,
-        );
+        ui.add_space(28.0);
+        ui.vertical_centered(|ui| {
+            ui.label(egui::RichText::new(crate::i18n::tr("No requirements yet")).size(12.0).color(t.text));
+            ui.add_space(6.0);
+            ui.label(egui::RichText::new(crate::i18n::tr("Ask the Agent to write one, or press New below")).size(10.0).color(t.text_secondary));
+        });
     }
-    for doc in &input.requirements.documents {
-        if y + 40.0 > body.max.y - 40.0 {
-            break;
+    let mut area = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(Rect::from_min_max(pos2(body.min.x, y), pos2(body.max.x, body.max.y - 40.0)))
+            .layout(Layout::top_down(Align::Min)),
+    );
+    egui::ScrollArea::vertical().auto_shrink([false, false]).id_salt("requirements-list").show(&mut area, |ui| {
+        ui.spacing_mut().item_spacing.y = 4.0;
+        for doc in &input.requirements.documents {
+            let r = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), 44.0));
+            let resp = ui.interact(r, Id::unique(("req-row", &doc.id)), Sense::click());
+            let resp = resp.on_hover_text(crate::i18n::tr("Open"));
+            if resp.hovered() {
+                ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
+            }
+            ui.painter().text(
+                pos2(r.min.x + 9.0, r.min.y + 11.0),
+                Align2::LEFT_CENTER,
+                widgets::elide_font(ui, &doc.title, r.width() - 70.0, crate::theme::semibold(11.5)),
+                crate::theme::semibold(11.5),
+                t.text,
+            );
+            // The id, so a person can name the document to the Agent.
+            ui.painter().text(pos2(r.max.x - 9.0, r.min.y + 11.0), Align2::RIGHT_CENTER, &doc.id, crate::theme::regular(9.0), t.text_tertiary);
+            let counts =
+                format!("{} {} · {} {}", doc.requirements, crate::i18n::tr("requirements"), doc.acceptance_criteria, crate::i18n::tr("criteria"),);
+            ui.painter().text(pos2(r.min.x + 9.0, r.min.y + 30.0), Align2::LEFT_CENTER, counts, crate::theme::regular(9.0), t.text_tertiary);
+            if resp.clicked() {
+                out.push(Request::OpenRequirements { id: doc.id.clone() });
+            }
+            ui.add_space(44.0);
         }
-        let r = Rect::from_min_size(pos2(body.min.x + 12.0, y), vec2(body.width() - 24.0, 36.0));
-        let resp = ui.interact(r, Id::unique(("req-row", &doc.id)), Sense::click()).tip(crate::i18n::tr("Open"));
-        if resp.hovered() {
-            ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
-        }
-        ui.painter().text(
-            pos2(r.min.x + 8.0, r.min.y + 10.0),
-            Align2::LEFT_CENTER,
-            widgets::elide_font(ui, &doc.title, r.width() - 16.0, crate::theme::semibold(11.0)),
-            crate::theme::semibold(11.0),
-            t.text,
-        );
-        let counts = format!("{} · {}", doc.requirements, doc.acceptance_criteria);
-        ui.painter().text(pos2(r.min.x + 8.0, r.min.y + 26.0), Align2::LEFT_CENTER, counts, crate::theme::regular(9.0), t.text_tertiary);
-        if resp.clicked() {
-            out.push(Request::OpenRequirements { id: doc.id.clone() });
-        }
-        y += 40.0;
-    }
+    });
+    let _ = y;
 
     // New document: refused before trying when the file is full.
     let new_r = Rect::from_min_size(pos2(body.min.x + 12.0, body.max.y - 34.0), vec2(body.width() - 24.0, 24.0));

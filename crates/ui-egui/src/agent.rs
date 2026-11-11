@@ -721,8 +721,15 @@ fn draw_chat(ui: &mut Ui, state: &mut AgentPanel, input: &PanelInput, t: &Tokens
     // The transcript scrolls. It is the one part of this panel that grows without limit, and drawing it
     // to fixed geometry meant a long conversation simply ran off the bottom with no way to reach it.
     let mut area = ui.new_child(egui::UiBuilder::new().max_rect(transcript).layout(Layout::top_down(Align::Min)));
-    egui::ScrollArea::vertical().auto_shrink([false, false]).stick_to_bottom(true).show(&mut area, |ui| {
+    // An explicit height, for the same reason as the requirements form: a `new_child` Ui does not
+    // report the room its rect offers, so the scroll area saw an unbounded height and a long
+    // conversation ran off the bottom with no way to reach it.
+    let transcript_height = (transcript.height() - 4.0).max(32.0);
+    egui::ScrollArea::vertical().max_height(transcript_height).auto_shrink([false, false]).stick_to_bottom(true).show(&mut area, |ui| {
         ui.add_space(14.0);
+        // Content is inset on both sides: a bubble flush to the panel edge reads as clipped.
+        ui.add_space(0.0);
+        ui.set_max_width(ui.available_width() - 16.0);
         // Room to breathe between turns: 6 packed a long conversation into a wall of text, which is
         // most of why the panel read as cramped.
         ui.spacing_mut().item_spacing.y = 10.0;
@@ -1157,12 +1164,18 @@ fn draw_requirements_editor(
     let form = Rect::from_min_max(body.min, pos2(body.max.x, body.max.y - BAR));
     let bar = Rect::from_min_max(pos2(body.min.x, form.max.y), body.max);
 
+    // The scroll area is given an explicit height. A `new_child` Ui does not report the room its rect
+    // offers, so a `ScrollArea` inside one got an unbounded available height and never scrolled: the
+    // form simply drew past the bottom of the panel. `max_height` is the height the form actually has.
     let mut area = ui.new_child(egui::UiBuilder::new().max_rect(form).layout(Layout::top_down(Align::Min)));
     let ui = &mut area;
-    egui::ScrollArea::vertical().auto_shrink([false, false]).id_salt("requirements-editor").show(ui, |ui| {
-        ui.add_space(10.0);
-        ui.spacing_mut().item_spacing.y = 8.0;
-        let width = ui.available_width() - 4.0;
+    let form_height = (form.height() - 4.0).max(32.0);
+    egui::ScrollArea::vertical().max_height(form_height).auto_shrink([false, false]).id_salt("requirements-editor").show(ui, |ui| {
+        // Inset from the panel edge, and inset on both sides: content pinned to the left edge of a
+        // window reads as clipped rather than as a form.
+        ui.add_space(12.0);
+        ui.spacing_mut().item_spacing.y = 9.0;
+        let width = (ui.available_width() - 28.0).max(80.0);
 
         /// A labelled multi-line field: a label, then the box, both in the flow.
         fn field(ui: &mut Ui, t: &Tokens, label: &str, value: &mut String, rows: usize, width: f32) {
@@ -1186,7 +1199,7 @@ fn draw_requirements_editor(
         if let Some(note) = &state.export_note {
             ui.label(egui::RichText::new(note.as_str()).size(9.0).color(t.text_tertiary));
         }
-        ui.add_space(8.0);
+        ui.add_space(10.0);
     });
 
     // The action bar: part of the panel, so it is always on screen however long the form is.

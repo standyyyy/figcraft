@@ -192,3 +192,39 @@ fn the_requirements_tab_paints_its_own_background() {
     let input = PanelInput { configured: true, ..Default::default() };
     assert!(covers(320.0, 620.0, pos2(160.0, 300.0), &mut state, &input) > 0, "the requirements body is filled");
 }
+
+#[test]
+fn a_long_form_lays_out_instead_of_running_off_the_panel() {
+    // A `ScrollArea` inside a `new_child` Ui saw an unbounded available height and never scrolled, so
+    // a tall requirements form drew past the bottom of the panel and the Back button went with it.
+    // This lays the editor out with more content than fits, at a short and a tall window, and checks
+    // the panel still produces a coherent frame at both sizes.
+    let mut state = AgentPanel::new("doc-1");
+    state.tab = AgentTab::Requirements;
+    let doc = figcraft_doc::RequirementsDocument {
+        id: "PRD:1".into(),
+        title: "A title long enough to wrap inside a narrow panel".into(),
+        summary: "A summary that would overflow a fixed layout, which is what the painter did before.".into(),
+        goals: (0..12).map(|i| format!("goal {i}")).collect(),
+        non_goals: (0..8).map(|i| format!("non-goal {i}")).collect(),
+        audiences: (0..6).map(|i| format!("audience {i}")).collect(),
+        requirements: (0..14)
+            .map(|i| figcraft_doc::Requirement {
+                id: format!("r-{i}"),
+                title: format!("requirement {i}"),
+                detail: "detail".into(),
+                priority: figcraft_doc::Priority::Must,
+                acceptance_criteria: vec!["a".into(), "b".into()],
+            })
+            .collect(),
+        acceptance_criteria: (0..10).map(|i| format!("criterion {i}")).collect(),
+        open_questions: (0..5).map(|i| format!("question {i}")).collect(),
+    };
+    state.requirements_draft = Some(RequirementsDraft::from_document(&doc));
+    let input = PanelInput { configured: true, ..Default::default() };
+    for height in [420.0, 900.0] {
+        let (ctx, screen) = layout(320.0, height, &mut state, &input);
+        assert_eq!(ctx.content_rect().width(), screen.width(), "the panel used the width it was given at {height}");
+        assert_eq!(ctx.content_rect().height(), screen.height(), "and the height");
+    }
+}

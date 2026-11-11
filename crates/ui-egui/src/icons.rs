@@ -236,6 +236,8 @@ icons! {
     /// into a box (voting).
     Timer,
     Pause,
+    /// Send: an arrow rising out of a short base. Drawn here, on the same 16-unit grid.
+    Send,
     Vote,
     /// A measurement: a dimension line with arrowheads between two end ticks.
     Measure,

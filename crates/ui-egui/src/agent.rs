@@ -540,6 +540,7 @@ pub fn status_of(run: Option<&AgentRun>) -> RunStatus {
 // ---------- drawing ----------
 
 use crate::a11y::Tip as _;
+use crate::icons::Icon;
 use crate::theme::Tokens;
 use crate::widgets;
 use egui::{Align, Align2, CornerRadius, Id, Layout, Rect, Sense, Stroke, Ui, Vec2, pos2, vec2};
@@ -824,6 +825,28 @@ fn bubble(ui: &mut Ui, t: &Tokens, title: &str, text: &str, kind: Kind) {
     });
 }
 
+/// A round icon button: filled with the accent when it will act, quiet when it will not.
+///
+/// Drawn rather than assembled from a `Button`, because the shape is the message: a circle at the end
+/// of the composer is the one control a person reaches for without reading it.
+fn round_button(ui: &mut Ui, t: &Tokens, icon: Icon, enabled: bool) -> egui::Response {
+    let size = 26.0;
+    let (rect, resp) = ui.allocate_exact_size(vec2(size, size), Sense::click());
+    let hovered = enabled && resp.hovered();
+    let fill = if !enabled {
+        t.field
+    } else if hovered {
+        t.accent.gamma_multiply(0.85)
+    } else {
+        t.accent
+    };
+    ui.painter().circle_filled(rect.center(), size / 2.0, fill);
+    let tint = if enabled { t.accent_on } else { t.text_tertiary };
+    crate::icons::paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(14.0, 14.0)), icon, tint);
+    // A disabled control says why it is disabled; a click is only reported when it can act.
+    if enabled { resp } else { resp.on_hover_text(crate::i18n::tr("Set the provider in Preferences")) }
+}
+
 /// The "still working" line: a spinner and what the turn is doing at the moment.
 ///
 /// The spinner is egui's, so it animates and requests its own repaint: a static dot would be
@@ -955,17 +978,22 @@ fn draw_composer(ui: &mut Ui, state: &mut AgentPanel, input: &PanelInput, t: &To
     let submitted = resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.shift);
 
     ui.horizontal(|ui| {
-        let send = ui.add_enabled(can_send, egui::Button::new(crate::i18n::tr("Send")).min_size(vec2(64.0, 22.0)));
-        let send = send.on_hover_text(if input.configured { crate::i18n::tr("Send") } else { crate::i18n::tr("Set the provider in Preferences") });
-        if (send.clicked() || submitted) && can_send {
-            out.push(Request::Send { request: state.draft.clone() });
-        }
+        // One round button that says what it will do: an arrow when a message can go, a pause bar
+        // while one is running. The same spot, the same size, so the muscle memory works.
         if state.is_running() {
-            if ui.add(egui::Button::new(crate::i18n::tr("Stop")).min_size(vec2(64.0, 22.0))).clicked() {
+            if round_button(ui, t, Icon::Pause, true).on_hover_text(crate::i18n::tr("Stop")).clicked() {
                 out.push(Request::Cancel);
             }
-        } else if input.chat.can_retry(state.status) {
-            let retry = ui.add(egui::Button::new(crate::i18n::tr("Retry")).min_size(vec2(64.0, 22.0)));
+        } else {
+            let send = round_button(ui, t, Icon::Send, can_send);
+            let send =
+                send.on_hover_text(if input.configured { crate::i18n::tr("Send") } else { crate::i18n::tr("Set the provider in Preferences") });
+            if (send.clicked() || submitted) && can_send {
+                out.push(Request::Send { request: state.draft.clone() });
+            }
+        }
+        if !state.is_running() && input.chat.can_retry(state.status) {
+            let retry = ui.add(egui::Button::new(crate::i18n::tr("Retry")).min_size(vec2(56.0, 24.0)));
             if retry.on_hover_text(crate::i18n::tr("Run it again")).clicked() {
                 out.push(Request::Retry);
             }

@@ -1061,6 +1061,13 @@ fn draw(p: &P, icon: Icon) {
             p.line(8.0, 1.5, 8.0, 3.5);
             p.line(12.0, 4.0, 13.5, 2.5);
         }
+        Send => {
+            // An arrow rising from a baseline: a shaft, a head, and a short bar under it, so it reads
+            // as "send upward" at 12 px without a letter.
+            p.line(8.0, 2.5, 8.0, 11.0);
+            p.poly(&[(8.0, 2.5), (4.8, 5.7), (8.0, 4.4), (11.2, 5.7)], true);
+            p.line(4.5, 13.0, 11.5, 13.0);
+        }
         Pause => {
             p.fill_rect(4.0, 3.0, 6.5, 13.0, 0.5);
             p.fill_rect(9.5, 3.0, 12.0, 13.0, 0.5);

@@ -131,20 +131,15 @@ impl FigApp {
                 "dialog.missingFonts" => missing_fonts::request(self),
                 "dialog.createFromColor" => crate::sampled_color::request(self, &r.data),
                 "panel.shortcuts" => self.ui.shortcuts_panel = !self.ui.shortcuts_panel,
-                // The in-app Agent panel: a toggle, so a keyboard shortcut or the palette can reach it.
-                // Straight to the requirements tab: the documents are Agent-produced, but reaching them
-                // should not require opening the Agent and then finding a tab.
-                "panel.requirements" => match self.ui.agent.take() {
-                    Some(mut panel) => {
-                        panel.tab = agent::AgentTab::Requirements;
-                        self.ui.agent = Some(panel);
-                    }
-                    None => {
-                        let mut panel = agent::AgentPanel::new(agent::conversation_id(self.session.ds().map(|d| d.uid).unwrap_or(0)));
-                        panel.tab = agent::AgentTab::Requirements;
-                        self.ui.agent = Some(panel);
-                    }
-                },
+                // The requirements window, not the sidebar tab: a document is read and reviewed,
+                // and it needs the room. The sidebar keeps the conversation.
+                "panel.requirements" => {
+                    let panel = self
+                        .ui
+                        .agent
+                        .get_or_insert_with(|| agent::AgentPanel::new(agent::conversation_id(self.session.ds().map(|d| d.uid).unwrap_or(0))));
+                    panel.window_open = true;
+                }
                 "panel.agent" => match self.ui.agent.take() {
                     Some(_) => {}
                     None => {

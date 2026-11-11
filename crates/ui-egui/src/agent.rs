@@ -88,6 +88,17 @@ pub struct AgentPanel {
     pub requirements_draft: Option<RequirementsDraft>,
     /// The Markdown export result, shown briefly.
     pub export_note: Option<String>,
+    /// Whether the requirements window is open, separately from the Agent panel.
+    ///
+    /// A requirements document is read and reviewed, not glanced at: fourteen requirements with their
+    /// interactions, fields and acceptance criteria do not fit a 320 px sidebar, and squeezing them
+    /// into one was what made the panel feel dense. The window has the room, the sidebar keeps the
+    /// conversation.
+    pub window_open: bool,
+    /// The window is in its edit form rather than its reading form.
+    pub window_editing: bool,
+    /// Which requirement is expanded in the reading form; the rest stay one line.
+    pub expanded: Option<String>,
 }
 
 /// The editable fields of one requirements document.
@@ -255,6 +266,9 @@ impl AgentPanel {
             editing: None,
             requirements_draft: None,
             export_note: None,
+            window_open: false,
+            window_editing: false,
+            expanded: None,
         }
     }
 
@@ -308,6 +322,8 @@ impl AgentPanel {
             // bug report with nothing to diagnose.
             "error": self.error,
             "editingRequirements": self.editing.is_some(),
+            "windowOpen": self.window_open,
+            "windowEditing": self.window_editing,
         })
     }
 
@@ -420,6 +436,11 @@ pub struct RequirementsList {
     pub documents: Vec<RequirementsEntry>,
     /// The cap, so the panel can say when it is reached.
     pub max: usize,
+    /// The document the window is showing, in full.
+    ///
+    /// The list gives counts; the reading form needs the requirements themselves. One load per frame
+    /// of the open document is what makes the window readable without a second command per field.
+    pub open_document: Option<RequirementsDocument>,
 }
 
 /// One requirements document in the list.
@@ -450,7 +471,7 @@ impl RequirementsList {
                     .collect()
             })
             .unwrap_or_default();
-        Self { documents, max: v.get("max").and_then(Value::as_u64).unwrap_or(32) as usize }
+        Self { documents, max: v.get("max").and_then(Value::as_u64).unwrap_or(32) as usize, open_document: None }
     }
 
     /// Whether the cap is reached, so creating another is refused before trying.
@@ -1775,10 +1796,18 @@ pub(crate) fn panel_input(app: &mut crate::FigApp) -> PanelInput {
     let configured = figcraft_agent::AgentConfig::from_prefs(&app.session.prefs.agent).is_ok();
     app.ui.agent_configured = configured;
     // The list comes from the command that owns requirements, so the panel and MCP agree.
-    let requirements = match app.session.execute("requirements.list", &serde_json::json!({})) {
+    let mut requirements = match app.session.execute("requirements.list", &serde_json::json!({})) {
         Ok(v) => RequirementsList::from_result(&v),
         Err(_) => RequirementsList::default(),
     };
+    // The reading form needs the open document in full: the list carries counts only.
+    if let Some(id) = app.ui.agent.as_ref().and_then(|p| p.editing.clone())
+        && let Ok(v) = app.session.execute("requirements.get", &serde_json::json!({"id": id}))
+        && let Some(doc) = v.get("document")
+        && let Ok(d) = serde_json::from_value::<RequirementsDocument>(doc.clone())
+    {
+        requirements.open_document = Some(d);
+    }
     let conversation = app.session.ds().ok().map(|d| conversation_id(d.uid)).unwrap_or_else(|| "doc-0".to_string());
     let chat = conversation_view(&app.ui.agent_transcript, &conversation);
     PanelInput { configured, requirements, chat }
@@ -1812,6 +1841,9 @@ pub fn perform_requests(app: &mut crate::FigApp) {
                     if let (Some(doc), Some(p)) = (doc, app.ui.agent.as_mut()) {
                         p.requirements_draft = Some(RequirementsDraft::from_document(&doc));
                         p.editing = Some(id);
+                        // Opening a document shows it: the window is where it is read.
+                        p.window_open = true;
+                        p.expanded = None;
                     }
                 }
                 Err(e) => {
@@ -2031,4 +2063,435 @@ pub fn markdown_filename(title: &str) -> String {
     }
     let trimmed: String = out.trim_matches(|c: char| c == '-' || c.is_whitespace()).chars().take(MAX).collect();
     if trimmed.is_empty() { "requirements.md".to_string() } else { format!("{trimmed}.md") }
+}
+
+// ---------- the requirements window ----------
+
+/// The width of the document list on the left of the requirements window.
+const REQ_LIST_W: f32 = 220.0;
+
+/// Show the requirements window while it is open (call once per frame).
+///
+/// A document is read more often than it is edited, and it is read in parts: the goals, one
+/// requirement, its acceptance criteria. Fourteen requirements with their interactions and fields do
+/// not fit a sidebar, and a column of text boxes gives no way to see which part is which -- so the
+/// window reads first, and the form is a mode.
+pub fn requirements_window(app: &mut crate::FigApp, ctx: &egui::Context) {
+    let Some(mut st) = app.ui.agent.take() else { return };
+    if !st.window_open {
+        app.ui.agent = Some(st);
+        return;
+    }
+    let input = panel_input(app);
+    let t = Tokens::get(ctx);
+    let screen = ctx.content_rect();
+    let size = vec2(1040.0_f32.min(screen.width() - 80.0).max(560.0), 720.0_f32.min(screen.height() - 80.0).max(400.0));
+    let mut open = true;
+    let mut out = PanelOutput::default();
+    egui::Window::new(crate::i18n::tr("Requirements"))
+        .id(Id::unique("requirements_window"))
+        .title_bar(false)
+        .collapsible(false)
+        .resizable(true)
+        .default_size(size)
+        .min_size(vec2(560.0, 400.0))
+        .pivot(Align2::CENTER_CENTER)
+        .default_pos(screen.center())
+        .frame(egui::Frame::NONE.fill(t.panel).stroke(Stroke::new(1.0, t.border_strong)).corner_radius(CornerRadius::same(8)))
+        .show(ctx, |ui| {
+            ui.set_min_size(vec2(size.x, ui.available_height()));
+            if requirements_header(ui, &mut st, &t, &input, &mut out) {
+                open = false;
+            }
+            let body = Rect::from_min_max(pos2(ui.max_rect().min.x, ui.max_rect().min.y + 52.0), ui.max_rect().max);
+            if st.window_editing {
+                requirements_edit(ui, &mut st, &t, &input, body, &mut out);
+            } else {
+                requirements_read(ui, &mut st, &t, &input, body, &mut out);
+            }
+        });
+    app.ui.agent_requests.append(&mut out.requests);
+    if !open {
+        st.window_open = false;
+    }
+    app.ui.agent = Some(st);
+}
+
+/// The window's title bar: what it is, a mode switch, and a close button. True when closing.
+fn requirements_header(ui: &mut Ui, st: &mut AgentPanel, t: &Tokens, input: &PanelInput, out: &mut PanelOutput) -> bool {
+    let head = Rect::from_min_size(ui.max_rect().min, vec2(ui.max_rect().width(), 52.0));
+    ui.painter().rect_filled(head, CornerRadius { nw: 8, ne: 8, sw: 0, se: 0 }, t.tab_bar);
+    ui.painter().text(
+        pos2(head.min.x + 18.0, head.center().y),
+        Align2::LEFT_CENTER,
+        crate::i18n::tr("Requirements"),
+        crate::theme::semibold(13.0),
+        t.text,
+    );
+    // How much is in the file, so the window says something before a document is opened.
+    let summary = format!(
+        "{} {} · {} {}",
+        input.requirements.documents.len(),
+        crate::i18n::tr("documents"),
+        input.requirements.documents.iter().map(|d| d.requirements).sum::<usize>(),
+        crate::i18n::tr("requirements"),
+    );
+    ui.painter().text(pos2(head.min.x + 106.0, head.center().y), Align2::LEFT_CENTER, summary, crate::theme::regular(9.5), t.text_tertiary);
+    ui.painter().line_segment([pos2(head.min.x, head.max.y), pos2(head.max.x, head.max.y)], Stroke::new(1.0, t.border));
+
+    let mut close = false;
+    let mut child = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(Rect::from_min_size(pos2(head.max.x - 250.0, head.min.y + 14.0), vec2(234.0, 24.0)))
+            .layout(Layout::right_to_left(Align::Center)),
+    );
+    if child.add(egui::Button::new("×").min_size(vec2(22.0, 22.0))).on_hover_text(crate::i18n::tr("Close")).clicked() {
+        close = true;
+    }
+    // Reading or editing, as an explicit pair: a person should know which one they are in.
+    let editing = st.window_editing;
+    if child.add(egui::Button::new(crate::i18n::tr("Edit")).selected(editing).min_size(vec2(52.0, 22.0))).clicked() {
+        st.window_editing = true;
+    }
+    if child.add(egui::Button::new(crate::i18n::tr("Read")).selected(!editing).min_size(vec2(52.0, 22.0))).clicked() {
+        st.window_editing = false;
+    }
+    let _ = out;
+    close
+}
+
+/// The left column: every document in the file, the open one marked. True when one was clicked.
+fn requirements_list_column(ui: &mut Ui, st: &mut AgentPanel, t: &Tokens, input: &PanelInput, out: &mut PanelOutput) {
+    ui.painter().rect_filled(ui.max_rect(), CornerRadius { nw: 0, ne: 0, sw: 8, se: 0 }, t.field);
+    let mut area = ui.max_rect();
+    area.max.x -= 1.0;
+    let (line, _) = ui.allocate_exact_size(vec2(1.0, area.height()), Sense::hover());
+    ui.painter().rect_filled(line, CornerRadius::ZERO, t.border);
+    ui.scope_builder(egui::UiBuilder::new().max_rect(ui.max_rect().shrink2(vec2(8.0, 10.0))), |ui| {
+        egui::ScrollArea::vertical().max_height((ui.available_height() - 4.0).max(32.0)).auto_shrink([false, false]).id_salt("req-window-list").show(
+            ui,
+            |ui| {
+                ui.spacing_mut().item_spacing.y = 3.0;
+                for doc in &input.requirements.documents {
+                    let open = st.editing.as_deref() == Some(doc.id.as_str());
+                    let r = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), 40.0));
+                    let resp = ui.interact(r, Id::unique(("req-win-row", &doc.id)), Sense::click());
+                    if open {
+                        ui.painter().rect_filled(r, CornerRadius::same(5), t.selected_row);
+                    } else if resp.hovered() {
+                        ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
+                    }
+                    ui.painter().text(
+                        pos2(r.min.x + 8.0, r.min.y + 10.0),
+                        Align2::LEFT_CENTER,
+                        widgets::elide_font(ui, &doc.title, r.width() - 16.0, crate::theme::semibold(10.5)),
+                        crate::theme::semibold(10.5),
+                        if open { t.text } else { t.text_secondary },
+                    );
+                    ui.painter().text(
+                        pos2(r.min.x + 8.0, r.min.y + 27.0),
+                        Align2::LEFT_CENTER,
+                        format!("{} · {} {}", doc.id, doc.requirements, crate::i18n::tr("req")),
+                        crate::theme::regular(8.5),
+                        t.text_tertiary,
+                    );
+                    if resp.clicked() {
+                        out.push(Request::OpenRequirements { id: doc.id.clone() });
+                    }
+                    ui.add_space(40.0);
+                }
+            },
+        );
+    });
+}
+
+/// The reading form: the document as sections, each requirement as a card that expands.
+fn requirements_read(ui: &mut Ui, st: &mut AgentPanel, t: &Tokens, input: &PanelInput, body: Rect, out: &mut PanelOutput) {
+    let list = Rect::from_min_max(body.min, pos2(body.min.x + REQ_LIST_W, body.max.y));
+    let doc_area = Rect::from_min_max(pos2(list.max.x, body.min.y), body.max);
+    let mut left = ui.new_child(egui::UiBuilder::new().max_rect(list));
+    requirements_list_column(&mut left, st, t, input, out);
+
+    let Some(doc) = input.requirements.open_document.as_ref() else {
+        let mut right = ui.new_child(egui::UiBuilder::new().max_rect(doc_area));
+        right.centered_and_justified(|ui| {
+            ui.label(egui::RichText::new(crate::i18n::tr("Pick a document on the left")).size(11.0).color(t.text_tertiary));
+        });
+        return;
+    };
+    ui.scope_builder(egui::UiBuilder::new().max_rect(doc_area.shrink2(vec2(0.0, 0.0))), |ui| {
+        egui::ScrollArea::vertical().max_height((doc_area.height() - 4.0).max(32.0)).auto_shrink([false, false]).id_salt("req-window-read").show(
+            ui,
+            |ui| {
+                egui::Frame::NONE.inner_margin(egui::Margin { left: 26, right: 26, top: 18, bottom: 24 }).show(ui, |ui| {
+                    ui.set_max_width((doc_area.width() - 60.0).max(200.0));
+                    // The title is the one thing on screen at full strength; everything else steps down.
+                    ui.label(egui::RichText::new(doc.title.as_str()).size(19.0).strong().color(t.text));
+                    ui.add_space(2.0);
+                    let meta = format!("{} · {} {}", doc.id, doc.requirements.len(), crate::i18n::tr("requirements"));
+                    ui.label(egui::RichText::new(meta).size(9.5).color(t.text_tertiary));
+                    if !doc.summary.trim().is_empty() {
+                        ui.add_space(10.0);
+                        ui.label(egui::RichText::new(doc.summary.as_str()).size(11.0).color(t.text_secondary));
+                    }
+
+                    read_list(ui, t, crate::i18n::tr("Goals"), &doc.goals);
+                    read_list(ui, t, crate::i18n::tr("Non-goals"), &doc.non_goals);
+                    read_list(ui, t, crate::i18n::tr("Audiences"), &doc.audiences);
+
+                    if !doc.user_flows.is_empty() {
+                        read_section(ui, t, crate::i18n::tr("User flows"));
+                        for (i, step) in doc.user_flows.iter().enumerate() {
+                            ui.horizontal_top(|ui| {
+                                ui.label(egui::RichText::new(format!("{}.", i + 1)).size(10.5).color(t.text_tertiary));
+                                ui.vertical(|ui| {
+                                    ui.label(egui::RichText::new(step.action.as_str()).size(10.5).color(t.text));
+                                    if !step.response.trim().is_empty() {
+                                        ui.label(egui::RichText::new(format!("→ {}", step.response)).size(10.0).color(t.text_secondary));
+                                    }
+                                    if !step.timing.trim().is_empty() {
+                                        ui.label(egui::RichText::new(format!("⏱ {}", step.timing)).size(9.5).color(t.text_tertiary));
+                                    }
+                                });
+                            });
+                            ui.add_space(4.0);
+                        }
+                        ui.add_space(6.0);
+                    }
+
+                    if !doc.requirements.is_empty() {
+                        read_section(ui, t, crate::i18n::tr("Requirements"));
+                        for req in &doc.requirements {
+                            read_requirement(ui, st, t, req);
+                        }
+                    }
+
+                    read_list(ui, t, crate::i18n::tr("Glossary"), &doc.glossary);
+                    read_list(ui, t, crate::i18n::tr("Acceptance criteria"), &doc.acceptance_criteria);
+                    read_list(ui, t, crate::i18n::tr("Open questions"), &doc.open_questions);
+                    ui.add_space(10.0);
+                });
+            },
+        );
+    });
+}
+
+/// A section heading with the rule that starts it.
+fn read_section(ui: &mut Ui, t: &Tokens, title: &str) {
+    ui.add_space(16.0);
+    ui.label(egui::RichText::new(title).size(12.5).strong().color(t.text));
+    ui.add_space(5.0);
+    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
+    ui.painter().line_segment([r.left_center(), r.right_center()], Stroke::new(1.0, t.border));
+    ui.add_space(8.0);
+}
+
+/// A bulleted list, or nothing at all when it is empty.
+fn read_list(ui: &mut Ui, t: &Tokens, title: &str, items: &[String]) {
+    if items.is_empty() {
+        return;
+    }
+    read_section(ui, t, title);
+    for item in items {
+        ui.horizontal_top(|ui| {
+            ui.label(egui::RichText::new("·").size(10.5).color(t.text_tertiary));
+            ui.label(egui::RichText::new(item.as_str()).size(10.5).color(t.text_secondary));
+        });
+    }
+}
+
+/// One requirement as a card: a title line with its priority, opening to show what it holds.
+///
+/// Collapsed, fourteen requirements read as fourteen lines; open, one of them shows its detail,
+/// interactions, fields and acceptance criteria. Showing all of it at once is what made the sidebar
+/// unreadable: every line had the same weight and none of it stood out.
+fn read_requirement(ui: &mut Ui, st: &mut AgentPanel, t: &Tokens, req: &figcraft_doc::Requirement) {
+    let open = st.expanded.as_deref() == Some(req.id.as_str());
+    let fill = if open { t.field } else { t.panel };
+    egui::Frame::NONE
+        .fill(fill)
+        .stroke(Stroke::new(1.0, t.border))
+        .corner_radius(CornerRadius::same(6))
+        .inner_margin(egui::Margin::symmetric(11, 8))
+        .show(ui, |ui| {
+            let head = ui.horizontal(|ui| {
+                // The priority as a colour, which is faster to scan than the word.
+                let colour = match req.priority {
+                    figcraft_doc::Priority::Must => t.danger,
+                    figcraft_doc::Priority::Should => t.warning,
+                    figcraft_doc::Priority::Could => t.text_tertiary,
+                    figcraft_doc::Priority::Wont => t.border,
+                };
+                let (dot, _) = ui.allocate_exact_size(vec2(7.0, 7.0), Sense::hover());
+                ui.painter().circle_filled(dot.center(), 3.0, colour);
+                let label = ui
+                    .add(egui::Label::new(egui::RichText::new(req.title.as_str()).size(11.0).strong().color(t.text)).sense(Sense::click()))
+                    .on_hover_text(crate::i18n::tr("Open"));
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.label(egui::RichText::new(req.priority.as_str()).size(8.5).color(t.text_tertiary));
+                });
+                label
+            });
+            if head.inner.clicked() {
+                st.expanded = if open { None } else { Some(req.id.clone()) };
+            }
+            if !open {
+                return;
+            }
+            if !req.detail.trim().is_empty() {
+                ui.add_space(5.0);
+                ui.label(egui::RichText::new(req.detail.as_str()).size(10.0).color(t.text_secondary));
+            }
+            for (heading, items) in [
+                (crate::i18n::tr("Interactions"), &req.interactions),
+                (crate::i18n::tr("Fields"), &req.fields),
+                (crate::i18n::tr("Constraints"), &req.constraints),
+                (crate::i18n::tr("Acceptance criteria"), &req.acceptance_criteria),
+            ] {
+                if items.is_empty() {
+                    continue;
+                }
+                ui.add_space(7.0);
+                ui.label(egui::RichText::new(heading).size(9.0).color(t.text_tertiary));
+                for item in items {
+                    ui.horizontal_top(|ui| {
+                        ui.label(egui::RichText::new("·").size(9.5).color(t.text_tertiary));
+                        ui.label(egui::RichText::new(item.as_str()).size(9.5).color(t.text_secondary));
+                    });
+                }
+            }
+        });
+    ui.add_space(6.0);
+}
+
+/// The editing form inside the window: the same grouped fields as the sidebar had, with the room the
+/// window gives them.
+fn requirements_edit(ui: &mut Ui, st: &mut AgentPanel, t: &Tokens, input: &PanelInput, body: Rect, out: &mut PanelOutput) {
+    let list = Rect::from_min_max(body.min, pos2(body.min.x + REQ_LIST_W, body.max.y));
+    let form_area = Rect::from_min_max(pos2(list.max.x, body.min.y), body.max);
+    let mut left = ui.new_child(egui::UiBuilder::new().max_rect(list));
+    requirements_list_column(&mut left, st, t, input, out);
+
+    let Some(mut draft) = st.requirements_draft.take() else {
+        let mut right = ui.new_child(egui::UiBuilder::new().max_rect(form_area));
+        right.centered_and_justified(|ui| {
+            ui.label(egui::RichText::new(crate::i18n::tr("Pick a document on the left")).size(11.0).color(t.text_tertiary));
+        });
+        return;
+    };
+    const BAR: f32 = 46.0;
+    let form = Rect::from_min_max(form_area.min, pos2(form_area.max.x, form_area.max.y - BAR));
+    let bar = Rect::from_min_max(pos2(form_area.min.x, form.max.y), form_area.max);
+    let height = (form.height() - 4.0).max(32.0);
+    ui.scope_builder(egui::UiBuilder::new().max_rect(form), |ui| {
+        egui::ScrollArea::vertical().max_height(height).auto_shrink([false, false]).id_salt("req-window-edit").show(ui, |ui| {
+            egui::Frame::NONE.inner_margin(egui::Margin { left: 26, right: 26, top: 16, bottom: 14 }).show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 14.0;
+                let width = (ui.available_width() - 6.0).max(120.0);
+                fn field(ui: &mut Ui, t: &Tokens, label: &str, value: &mut String, rows: usize, width: f32) {
+                    ui.label(egui::RichText::new(label).size(9.5).color(t.text_tertiary));
+                    ui.add_space(3.0);
+                    ui.add(
+                        egui::TextEdit::multiline(value)
+                            .desired_width(width)
+                            .desired_rows(rows)
+                            .frame(egui::Frame::NONE.fill(t.field).corner_radius(CornerRadius::same(4)).inner_margin(egui::Margin::symmetric(6, 5))),
+                    );
+                }
+                fn group(ui: &mut Ui, t: &Tokens, title: &str, note: &str, add: impl FnOnce(&mut Ui, f32), width: f32) {
+                    ui.add_space(4.0);
+                    ui.label(egui::RichText::new(title).size(11.5).strong().color(t.text));
+                    ui.label(egui::RichText::new(note).size(9.0).color(t.text_tertiary));
+                    ui.add_space(4.0);
+                    let (r, _) = ui.allocate_exact_size(vec2(width, 1.0), Sense::hover());
+                    ui.painter().line_segment([r.left_center(), r.right_center()], Stroke::new(1.0, t.border));
+                    ui.add_space(6.0);
+                    add(ui, width);
+                }
+                group(
+                    ui,
+                    t,
+                    crate::i18n::tr("Overview"),
+                    crate::i18n::tr("What this document is about"),
+                    |ui, width| {
+                        field(ui, t, crate::i18n::tr("Title"), &mut draft.title, 1, width);
+                        field(ui, t, crate::i18n::tr("Summary"), &mut draft.summary, 2, width);
+                    },
+                    width,
+                );
+                group(
+                    ui,
+                    t,
+                    crate::i18n::tr("Scope"),
+                    crate::i18n::tr("What this does and does not do, and for whom"),
+                    |ui, width| {
+                        field(ui, t, crate::i18n::tr("Goals (one per line)"), &mut draft.goals, 3, width);
+                        field(ui, t, crate::i18n::tr("Non-goals"), &mut draft.non_goals, 2, width);
+                        field(ui, t, crate::i18n::tr("Audiences"), &mut draft.audiences, 2, width);
+                    },
+                    width,
+                );
+                group(
+                    ui,
+                    t,
+                    crate::i18n::tr("Requirements"),
+                    crate::i18n::tr("One per line: title, priority, detail"),
+                    |ui, width| {
+                        field(ui, t, crate::i18n::tr("Requirements (title, priority, detail)"), &mut draft.requirements, 8, width);
+                    },
+                    width,
+                );
+                group(
+                    ui,
+                    t,
+                    crate::i18n::tr("Behaviour"),
+                    crate::i18n::tr("How it behaves: flows, states and the data it handles"),
+                    |ui, width| {
+                        field(ui, t, crate::i18n::tr("User flows (action -> response (timing))"), &mut draft.user_flows, 5, width);
+                        field(ui, t, crate::i18n::tr("Glossary (term: meaning)"), &mut draft.glossary, 3, width);
+                    },
+                    width,
+                );
+                group(
+                    ui,
+                    t,
+                    crate::i18n::tr("Verification"),
+                    crate::i18n::tr("How it is known to be done, and what is still open"),
+                    |ui, width| {
+                        field(ui, t, crate::i18n::tr("Acceptance criteria"), &mut draft.acceptance_criteria, 3, width);
+                        field(ui, t, crate::i18n::tr("Open questions"), &mut draft.open_questions, 2, width);
+                    },
+                    width,
+                );
+            });
+        });
+    });
+
+    ui.painter().rect_filled(bar, CornerRadius::ZERO, t.panel);
+    ui.painter().line_segment([bar.min, pos2(bar.max.x, bar.min.y)], Stroke::new(1.0, t.border));
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(bar.shrink2(vec2(26.0, 10.0))).layout(Layout::left_to_right(Align::Center)));
+    let ui = &mut child;
+    let saveable = draft.is_saveable() && !st.is_running();
+    if ui.add_enabled(saveable, egui::Button::new(crate::i18n::tr("Save")).min_size(vec2(64.0, 24.0))).clicked() {
+        out.push(Request::SaveRequirements { params: draft.to_params() });
+    }
+    let can_export = draft.id.is_some();
+    let export = ui.add_enabled(can_export, egui::Button::new(crate::i18n::tr("Export")).min_size(vec2(64.0, 24.0)));
+    if export.on_hover_text(crate::i18n::tr("Export as Markdown")).clicked()
+        && let Some(id) = draft.id.clone()
+    {
+        out.push(Request::ExportRequirements { id });
+    }
+    if ui.add(egui::Button::new(crate::i18n::tr("Delete")).min_size(vec2(60.0, 24.0))).clicked() {
+        match draft.id.clone() {
+            Some(id) => out.push(Request::DeleteRequirements { id }),
+            None => out.push(Request::CloseRequirements),
+        }
+    }
+    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        if let Some(id) = &draft.id {
+            ui.label(egui::RichText::new(id.as_str()).size(9.0).color(t.text_tertiary));
+        }
+    });
+    st.requirements_draft = Some(draft);
 }

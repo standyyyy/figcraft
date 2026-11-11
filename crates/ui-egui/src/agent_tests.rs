@@ -1305,12 +1305,13 @@ fn applying_a_refused_replay_lands_it_as_one_undo_step() {
 #[test]
 fn the_requirements_panel_opens_on_its_own_tab() {
     // The documents are Agent-produced, but reaching them used to need opening the Agent and then
-    // finding a second tab -- which is why a written document read as missing.
+    // finding a second tab -- which is why a written document read as missing. They have a window of
+    // their own now, in its reading form.
     let mut app = harness_with(true);
     app.ui.agent = None;
     app.run("view.requirements", serde_json::json!({}));
     let panel = app.ui.agent.as_ref().expect("the panel opened");
-    assert_eq!(panel.tab, AgentTab::Requirements, "on the requirements tab");
+    assert!(panel.window_open, "it is the requirements window");
 }
 
 #[test]
@@ -1348,4 +1349,43 @@ fn showing_requirements_switches_the_tab() {
     app.ui.agent_requests.push(Request::ShowRequirements);
     crate::agent::perform_requests(&mut app);
     assert_eq!(app.ui.agent.as_ref().map(|p| p.tab), Some(AgentTab::Requirements));
+}
+
+// ---------- the requirements window ----------
+
+#[test]
+fn the_requirements_command_opens_the_window_not_a_sidebar_tab() {
+    // A document is read and reviewed, not glanced at: fourteen requirements with their interactions
+    // and fields do not fit a 320 px sidebar, and squeezing them in was the density complaint.
+    let mut app = harness_with(true);
+    app.ui.agent = None;
+    app.run("view.requirements", serde_json::json!({}));
+    let panel = app.ui.agent.as_ref().expect("the panel exists");
+    assert!(panel.window_open, "the window is open");
+    assert!(!panel.window_editing, "and in its reading form");
+}
+
+#[test]
+fn opening_a_document_shows_the_window_in_reading_form() {
+    let mut app = harness_with(true);
+    app.session.execute("requirements.upsert", &serde_json::json!({"title": "PRD", "requirements": [{"title": "a"}]})).expect("create");
+    app.ui.agent_requests.push(Request::OpenRequirements { id: "PRD:1".into() });
+    crate::agent::perform_requests(&mut app);
+    let panel = app.ui.agent.as_ref().expect("panel");
+    assert!(panel.window_open, "the window opens");
+    assert_eq!(panel.editing.as_deref(), Some("PRD:1"), "on the document");
+    assert!(panel.expanded.is_none(), "with every card collapsed");
+}
+
+#[test]
+fn a_requirement_card_expands_and_collapses() {
+    // Collapsed, fourteen requirements read as fourteen lines; open, one shows what it holds.
+    let mut app = harness_with(true);
+    let mut panel = app.ui.agent.take().expect("panel");
+    assert!(panel.expanded.is_none());
+    panel.expanded = Some("r-1".into());
+    assert_eq!(panel.expanded.as_deref(), Some("r-1"));
+    panel.expanded = None;
+    assert!(panel.expanded.is_none());
+    app.ui.agent = Some(panel);
 }

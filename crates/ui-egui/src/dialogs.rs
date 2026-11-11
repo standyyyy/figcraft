@@ -525,6 +525,7 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
     menu_input_dialog(app, ctx);
     crate::variables_panel::show(app, ctx);
     crate::agent::show(app, ctx);
+    crate::agent::requirements_window(app, ctx);
     crate::dev_compare::show(app, ctx);
     crate::branch_ui::show(app, ctx);
     if app.ui.export_preview {

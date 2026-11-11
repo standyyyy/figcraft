@@ -250,3 +250,48 @@ fn the_shadow_is_a_copy_not_a_reference() {
     assert_eq!(l.doc().expect("doc").nodes().count(), live_count);
     assert_ne!(l.doc().expect("doc").node(page).map(|n| n.name.clone()), Some("Renamed in shadow".to_string()), "the live page kept its name");
 }
+
+#[test]
+fn an_immediately_repeated_call_is_not_run_twice() {
+    // A model that repeats a call -- same tool, same arguments, straight after -- used to create the
+    // same frame twice, and every child under both. The second call is answered from the first result
+    // so the document keeps one copy.
+    let mut s = Session::new();
+    s.execute("file.new", &json!({})).expect("file.new");
+    let mut shadow = Shadow::capture(&s).expect("capture");
+
+    let args = json!({"type": "frame", "x": 10.0, "y": 10.0, "width": 100.0, "height": 100.0, "name": "Once"});
+    let first = shadow.call(ToolPolicy::EmbeddedAgent, "create_node", &args);
+    let second = shadow.call(ToolPolicy::EmbeddedAgent, "create_node", &args);
+
+    assert_eq!(first.first_text(), second.first_text(), "the repeat reports the first result");
+    assert_eq!(shadow.replay().len(), 1, "and records one command, not two");
+}
+
+#[test]
+fn a_repeat_after_another_call_is_allowed() {
+    // Only the *immediately* previous call is remembered: create, inspect, create the same thing again
+    // is a different intent, and refusing it would break a legitimate repeat.
+    let mut s = Session::new();
+    s.execute("file.new", &json!({})).expect("file.new");
+    let mut shadow = Shadow::capture(&s).expect("capture");
+
+    let args = json!({"type": "rectangle", "x": 0.0, "y": 0.0, "width": 24.0, "height": 24.0, "name": "Cell"});
+    shadow.call(ToolPolicy::EmbeddedAgent, "create_node", &args);
+    shadow.call(ToolPolicy::EmbeddedAgent, "list_commands", &json!({}));
+    shadow.call(ToolPolicy::EmbeddedAgent, "create_node", &args);
+
+    assert_eq!(shadow.replay().len(), 2, "the second rectangle is real");
+}
+
+#[test]
+fn a_different_argument_is_never_treated_as_a_repeat() {
+    // Two frames of the same size at different places are two frames.
+    let mut s = Session::new();
+    s.execute("file.new", &json!({})).expect("file.new");
+    let mut shadow = Shadow::capture(&s).expect("capture");
+
+    shadow.call(ToolPolicy::EmbeddedAgent, "create_node", &json!({"type": "frame", "x": 0.0, "y": 0.0, "width": 50.0, "height": 50.0}));
+    shadow.call(ToolPolicy::EmbeddedAgent, "create_node", &json!({"type": "frame", "x": 500.0, "y": 0.0, "width": 50.0, "height": 50.0}));
+    assert_eq!(shadow.replay().len(), 2);
+}

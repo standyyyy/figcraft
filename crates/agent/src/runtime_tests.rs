@@ -483,3 +483,23 @@ fn the_prompt_says_to_use_the_icon_tool_rather_than_drawing_icons() {
     assert!(p.contains("do not draw an icon") || p.contains("do not draw an icon out of"), "it rules out redrawing");
     assert!(p.contains("emoji"), "and rules out emoji");
 }
+
+#[test]
+fn the_prompt_says_to_place_a_screen_clear_of_what_is_there() {
+    // The commonest way to ruin a file: a second prototype drawn on top of the first. The prompt has
+    // to name the placement rule, not just say "build".
+    let p = crate::runtime_prompt::SYSTEM_PROMPT.to_lowercase();
+    assert!(p.contains("inspect the document once"), "it says to look first");
+    assert!(p.contains("never overlap"), "and names the rule");
+    assert!(p.contains("bottom + 80") || p.contains("right + 80"), "and gives the arithmetic");
+    assert!(p.contains("one frame"), "one screen is one frame");
+}
+
+#[test]
+fn the_prompt_requires_the_brand_colour_on_a_control() {
+    // A screen with no #0052D9 does not read as TDesign: the primary action has to carry it.
+    let p = crate::runtime_prompt::SYSTEM_PROMPT;
+    assert!(p.contains("filled `#0052D9`"), "it says how a primary button is filled");
+    assert!(p.to_lowercase().contains("card's inner padding is 24"), "and the card padding");
+    assert!(p.contains("#E7E7E7"), "and the list divider");
+}

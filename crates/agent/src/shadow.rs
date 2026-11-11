@@ -37,6 +37,13 @@ pub struct Shadow {
     replay: Vec<ReplayStep>,
     /// Whether anything replayable changed (read-only tools leave the replay empty).
     dirty: bool,
+    /// The call just made, and its result, so an immediate repeat is answered rather than re-run.
+    ///
+    /// Only the *immediately* previous call is kept: a model that creates a layer, inspects, then
+    /// creates the same layer again on purpose is doing something different, and a longer memory
+    /// would refuse a legitimate repeat.
+    last_call: Option<(String, Value)>,
+    last_result: Option<figcraft_agent_tools::ToolResult>,
 }
 
 impl std::fmt::Debug for Shadow {
@@ -66,7 +73,7 @@ impl Shadow {
         doc.current_page = Some(ds.page);
         let mut session = Session::with_document(doc);
         session.set_selection(ds.selection.clone());
-        Ok(Self { session, base_revision, uid, replay: Vec::new(), dirty: false })
+        Ok(Self { session, base_revision, uid, replay: Vec::new(), dirty: false, last_call: None, last_result: None })
     }
 
     /// The shadow session, which tools run against.
@@ -84,6 +91,16 @@ impl Shadow {
     /// Read-only tools (`inspect_document`, `screenshot`, `list_commands`) are not recorded: they
     /// do not change the document, so replaying them would be noise.
     pub fn call(&mut self, policy: ToolPolicy, name: &str, args: &Value) -> figcraft_agent_tools::ToolResult {
+        // A model sometimes repeats a call it already made -- same tool, same arguments, immediately
+        // after. Running it twice creates the same frame twice, which is how a prototype ends up
+        // stacked on itself: two `Login` frames at the same place, and every child duplicated under
+        // both. The repeat is answered from the first result instead, so the model sees success and
+        // the document keeps one copy.
+        if self.last_call.as_ref().is_some_and(|(n, a)| n == name && a == args)
+            && let Some(result) = self.last_result.clone()
+        {
+            return result;
+        }
         let before = self.replay.len();
         let session = &mut self.session;
         let replay = &mut self.replay;
@@ -92,6 +109,8 @@ impl Shadow {
         if self.replay.len() > before {
             self.dirty = true;
         }
+        self.last_call = Some((name.to_string(), args.clone()));
+        self.last_result = Some(result.clone());
         result
     }
 

@@ -103,6 +103,10 @@ pub struct RequirementsDraft {
     pub audiences: String,
     pub acceptance_criteria: String,
     pub open_questions: String,
+    /// One user-flow step per line: `action → response (timing)`.
+    pub user_flows: String,
+    /// One term per line: `term: meaning`.
+    pub glossary: String,
     /// One requirement per line: `title | priority | detail`.
     pub requirements: String,
 }
@@ -119,6 +123,23 @@ impl RequirementsDraft {
             audiences: d.audiences.join("\n"),
             acceptance_criteria: d.acceptance_criteria.join("\n"),
             open_questions: d.open_questions.join("\n"),
+            user_flows: d
+                .user_flows
+                .iter()
+                .map(|s| {
+                    let mut line = s.action.clone();
+                    if !s.response.is_empty() {
+                        line.push_str(" → ");
+                        line.push_str(&s.response);
+                    }
+                    if !s.timing.is_empty() {
+                        line.push_str(&format!(" ({})", s.timing));
+                    }
+                    line
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+            glossary: d.glossary.join("\n"),
             requirements: d
                 .requirements
                 .iter()
@@ -145,6 +166,8 @@ impl RequirementsDraft {
             audiences: String::new(),
             acceptance_criteria: String::new(),
             open_questions: String::new(),
+            user_flows: String::new(),
+            glossary: String::new(),
             requirements: String::new(),
         }
     }
@@ -180,6 +203,19 @@ impl RequirementsDraft {
             "requirements": requirements,
             "acceptanceCriteria": lines(&self.acceptance_criteria),
             "openQuestions": lines(&self.open_questions),
+            "userFlows": lines(&self.user_flows).iter().map(|l| {
+                // `action → response (timing)`: the arrow separates the two, the parentheses the timing.
+                let (head, timing) = match l.rfind('(') {
+                    Some(i) if l.trim_end().ends_with(')') => (&l[..i], l[i + 1..l.len() - 1].trim()),
+                    _ => (l.as_str(), ""),
+                };
+                let (action, response) = match head.find('→') {
+                    Some(i) => (head[..i].trim(), head[i + '→'.len_utf8()..].trim()),
+                    None => (head.trim(), ""),
+                };
+                json!({"action": action, "response": response, "timing": timing})
+            }).collect::<Vec<_>>(),
+            "glossary": lines(&self.glossary),
         });
         if let Some(id) = self.id.as_ref().filter(|i| !i.is_empty()) {
             params["id"] = json!(id);
@@ -1182,6 +1218,22 @@ fn draw_requirements_editor(
                 ui.spacing_mut().item_spacing.y = 9.0;
                 let width = (ui.available_width() - 6.0).max(80.0);
 
+                /// A titled section holding its own fields.
+                ///
+                /// The heading and its one-line explanation are what turn a column of boxes into a document
+                /// with parts; a reader can find the part they want without reading all of it.
+                fn group(ui: &mut Ui, t: &Tokens, title: &str, note: &str, add: impl FnOnce(&mut Ui, f32), width: f32) {
+                    ui.add_space(6.0);
+                    ui.label(egui::RichText::new(title).size(11.5).strong().color(t.text));
+                    ui.label(egui::RichText::new(note).size(9.0).color(t.text_tertiary));
+                    ui.add_space(4.0);
+                    // A rule under the heading, so a long section has a visible start.
+                    let (r, _) = ui.allocate_exact_size(vec2(width, 1.0), Sense::hover());
+                    ui.painter().line_segment([r.left_center(), r.right_center()], Stroke::new(1.0, t.border));
+                    ui.add_space(6.0);
+                    add(ui, width);
+                }
+
                 /// A labelled multi-line field: a label, then the box, both in the flow.
                 fn field(ui: &mut Ui, t: &Tokens, label: &str, value: &mut String, rows: usize, width: f32) {
                     ui.label(egui::RichText::new(label).size(9.5).color(t.text_tertiary));
@@ -1193,14 +1245,63 @@ fn draw_requirements_editor(
                     );
                 }
 
-                field(ui, t, crate::i18n::tr("Title"), &mut draft.title, 1, width);
-                field(ui, t, crate::i18n::tr("Summary"), &mut draft.summary, 2, width);
-                field(ui, t, crate::i18n::tr("Goals (one per line)"), &mut draft.goals, 3, width);
-                field(ui, t, crate::i18n::tr("Non-goals"), &mut draft.non_goals, 2, width);
-                field(ui, t, crate::i18n::tr("Audiences"), &mut draft.audiences, 2, width);
-                field(ui, t, crate::i18n::tr("Requirements (title, priority, detail)"), &mut draft.requirements, 6, width);
-                field(ui, t, crate::i18n::tr("Acceptance criteria"), &mut draft.acceptance_criteria, 3, width);
-                field(ui, t, crate::i18n::tr("Open questions"), &mut draft.open_questions, 2, width);
+                // Grouped, not a single column of boxes: a requirements document has sections, and a
+                // form that runs eleven fields together is read as one undifferentiated block.
+                group(
+                    ui,
+                    t,
+                    crate::i18n::tr("Overview"),
+                    crate::i18n::tr("What this document is about"),
+                    |ui, width| {
+                        field(ui, t, crate::i18n::tr("Title"), &mut draft.title, 1, width);
+                        field(ui, t, crate::i18n::tr("Summary"), &mut draft.summary, 2, width);
+                    },
+                    width,
+                );
+                group(
+                    ui,
+                    t,
+                    crate::i18n::tr("Scope"),
+                    crate::i18n::tr("What this does and does not do, and for whom"),
+                    |ui, width| {
+                        field(ui, t, crate::i18n::tr("Goals (one per line)"), &mut draft.goals, 3, width);
+                        field(ui, t, crate::i18n::tr("Non-goals"), &mut draft.non_goals, 2, width);
+                        field(ui, t, crate::i18n::tr("Audiences"), &mut draft.audiences, 2, width);
+                    },
+                    width,
+                );
+                group(
+                    ui,
+                    t,
+                    crate::i18n::tr("Requirements"),
+                    crate::i18n::tr("One per line: title, priority, detail"),
+                    |ui, width| {
+                        field(ui, t, crate::i18n::tr("Requirements (title, priority, detail)"), &mut draft.requirements, 7, width);
+                    },
+                    width,
+                );
+                group(
+                    ui,
+                    t,
+                    crate::i18n::tr("Behaviour"),
+                    crate::i18n::tr("How it behaves: flows, states and the data it handles"),
+                    |ui, width| {
+                        field(ui, t, crate::i18n::tr("User flows (action -> response (timing))"), &mut draft.user_flows, 4, width);
+                        field(ui, t, crate::i18n::tr("Glossary (term: meaning)"), &mut draft.glossary, 3, width);
+                    },
+                    width,
+                );
+                group(
+                    ui,
+                    t,
+                    crate::i18n::tr("Verification"),
+                    crate::i18n::tr("How it is known to be done, and what is still open"),
+                    |ui, width| {
+                        field(ui, t, crate::i18n::tr("Acceptance criteria"), &mut draft.acceptance_criteria, 3, width);
+                        field(ui, t, crate::i18n::tr("Open questions"), &mut draft.open_questions, 2, width);
+                    },
+                    width,
+                );
                 if let Some(note) = &state.export_note {
                     ui.label(egui::RichText::new(note.as_str()).size(9.0).color(t.text_tertiary));
                 }

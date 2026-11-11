@@ -71,7 +71,43 @@ fn requirements_of(p: &Value) -> std::result::Result<Vec<Requirement>, String> {
             Some(_) => return Err("`acceptanceCriteria` must be an array of strings".into()),
             None => Vec::new(),
         };
-        out.push(Requirement { id, title, detail, priority, acceptance_criteria: criteria });
+        let strings = |key: &str| -> std::result::Result<Vec<String>, String> {
+            match obj.get(key) {
+                Some(Value::Array(a)) => Ok(a.iter().map(|c| c.as_str().unwrap_or("").to_string()).filter(|s| !s.is_empty()).collect()),
+                Some(_) => Err(format!("`{key}` must be an array of strings")),
+                None => Ok(Vec::new()),
+            }
+        };
+        out.push(Requirement {
+            id,
+            title,
+            detail,
+            priority,
+            acceptance_criteria: criteria,
+            interactions: strings("interactions")?,
+            fields: strings("fields")?,
+            constraints: strings("constraints")?,
+        });
+    }
+    Ok(out)
+}
+
+/// The user flow: one step per object, `{action, response, timing}`.
+fn user_flows_of(p: &Value) -> std::result::Result<Vec<figcraft_doc::requirements::UserStep>, String> {
+    let Some(arr) = p.get("userFlows") else { return Ok(Vec::new()) };
+    let Some(arr) = arr.as_array() else { return Err("`userFlows` must be an array".into()) };
+    let mut out = Vec::with_capacity(arr.len());
+    for item in arr {
+        let Some(obj) = item.as_object() else { return Err("each entry of `userFlows` must be an object".into()) };
+        let action = obj.get("action").and_then(Value::as_str).unwrap_or("").trim().to_string();
+        if action.is_empty() {
+            return Err("each `userFlows` entry needs an `action`".into());
+        }
+        out.push(figcraft_doc::requirements::UserStep {
+            action,
+            response: obj.get("response").and_then(Value::as_str).unwrap_or("").to_string(),
+            timing: obj.get("timing").and_then(Value::as_str).unwrap_or("").to_string(),
+        });
     }
     Ok(out)
 }
@@ -123,6 +159,8 @@ pub fn specs() -> Vec<CommandSpec> {
                     requirements: requirements_of(p).map_err(|e| bad("requirements.upsert", e))?,
                     acceptance_criteria: list_of(p, "acceptanceCriteria").map_err(|e| bad("requirements.upsert", e))?,
                     open_questions: list_of(p, "openQuestions").map_err(|e| bad("requirements.upsert", e))?,
+                    user_flows: user_flows_of(p).map_err(|e| bad("requirements.upsert", e))?,
+                    glossary: list_of(p, "glossary").map_err(|e| bad("requirements.upsert", e))?,
                 };
                 // Requirement ids the caller left out are ours to allocate, deterministically.
                 if existing.is_none() {

@@ -208,6 +208,7 @@ fn a_draft_round_trips_through_the_command_parameters() {
                 detail: "Prefill.".into(),
                 priority: Priority::Must,
                 acceptance_criteria: vec![],
+                ..Default::default()
             },
             Requirement {
                 id: "r-2".into(),
@@ -215,10 +216,12 @@ fn a_draft_round_trips_through_the_command_parameters() {
                 detail: String::new(),
                 priority: Priority::Should,
                 acceptance_criteria: vec![],
+                ..Default::default()
             },
         ],
         acceptance_criteria: vec!["Under 30 s.".into()],
         open_questions: vec!["Gifts?".into()],
+        ..Default::default()
     };
     let draft = RequirementsDraft::from_document(&d);
     assert_eq!(draft.title, "Checkout");

@@ -83,6 +83,36 @@ pub struct Requirement {
     /// How it is verified.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub acceptance_criteria: Vec<String>,
+    /// What the person does and what happens: one line per interaction, `trigger: response`.
+    ///
+    /// A requirement without this says what to build and not how it behaves, which is the half a
+    /// developer cannot infer -- "a search box" does not say whether typing filters as you go or on
+    /// Enter, and both are a day of work to change later.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub interactions: Vec<String>,
+    /// The data this requirement shows or collects: one line per field, `name: type, rule`.
+    ///
+    /// Without it a screen with a form does not say what goes in the form: the field names, their
+    /// types, whether each is required, and how long it may be.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<String>,
+    /// What is out of reach at this level: one line per dependency or constraint.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub constraints: Vec<String>,
+}
+
+/// One step of a user's path through the product: who, what they do, and what they see.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserStep {
+    /// What the person does, in their own terms.
+    pub action: String,
+    /// What the system does in response: the screen, the state, the message.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub response: String,
+    /// When it happens: a waiting time, an animation length, a timeout.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub timing: String,
 }
 
 /// A structured requirements document embedded in a design file.
@@ -107,6 +137,18 @@ pub struct RequirementsDocument {
     pub acceptance_criteria: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub open_questions: Vec<String>,
+    /// A person's path through the product, step by step, with how long each takes.
+    ///
+    /// The document said what to build; this says what happens in what order, which is what a flow
+    /// review is about and what a screen list cannot express.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub user_flows: Vec<UserStep>,
+    /// Terms the document uses and what they mean here, one line per term (`term: meaning`).
+    ///
+    /// Every product has words that mean something narrower inside it; without this each reader
+    /// assumes their own.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub glossary: Vec<String>,
 }
 
 /// Why a requirements document was refused.
@@ -272,6 +314,20 @@ impl RequirementsDocument {
                     out.push_str(&escape_md(&r.detail));
                     out.push_str("\n\n");
                 }
+                for (heading, items) in [("Interactions", &r.interactions), ("Fields", &r.fields), ("Constraints", &r.constraints)] {
+                    if items.is_empty() {
+                        continue;
+                    }
+                    out.push_str("**");
+                    out.push_str(heading);
+                    out.push_str("**\n\n");
+                    for item in items {
+                        out.push_str("- ");
+                        out.push_str(&escape_md(item));
+                        out.push('\n');
+                    }
+                    out.push('\n');
+                }
                 if !r.acceptance_criteria.is_empty() {
                     out.push_str("**Acceptance criteria**\n\n");
                     for c in &r.acceptance_criteria {
@@ -283,6 +339,25 @@ impl RequirementsDocument {
                 }
             }
         }
+        if !self.user_flows.is_empty() {
+            out.push_str("## User flows\n\n");
+            for (i, step) in self.user_flows.iter().enumerate() {
+                out.push_str(&format!("{}. ", i + 1));
+                out.push_str(&escape_md(&step.action));
+                if !step.response.trim().is_empty() {
+                    out.push_str(" → ");
+                    out.push_str(&escape_md(&step.response));
+                }
+                if !step.timing.trim().is_empty() {
+                    out.push_str(" (");
+                    out.push_str(&escape_md(&step.timing));
+                    out.push(')');
+                }
+                out.push('\n');
+            }
+            out.push('\n');
+        }
+        push_list(&mut out, "Glossary", &self.glossary);
         push_list(&mut out, "Acceptance criteria", &self.acceptance_criteria);
         push_list(&mut out, "Open questions", &self.open_questions);
         out.trim_end().to_string() + "\n"

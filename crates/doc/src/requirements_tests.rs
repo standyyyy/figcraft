@@ -16,9 +16,11 @@ fn sample() -> RequirementsDocument {
             detail: "Prefill from the previous order.".into(),
             priority: Priority::Must,
             acceptance_criteria: vec!["The saved address appears on return.".into()],
+            ..Default::default()
         }],
         acceptance_criteria: vec!["Checkout completes in under 30 s.".into()],
         open_questions: vec!["What about gift orders?".into()],
+        ..Default::default()
     }
 }
 

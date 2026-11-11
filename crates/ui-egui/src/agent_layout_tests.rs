@@ -215,10 +215,12 @@ fn a_long_form_lays_out_instead_of_running_off_the_panel() {
                 detail: "detail".into(),
                 priority: figcraft_doc::Priority::Must,
                 acceptance_criteria: vec!["a".into(), "b".into()],
+                ..Default::default()
             })
             .collect(),
         acceptance_criteria: (0..10).map(|i| format!("criterion {i}")).collect(),
         open_questions: (0..5).map(|i| format!("question {i}")).collect(),
+        ..Default::default()
     };
     state.requirements_draft = Some(RequirementsDraft::from_document(&doc));
     let input = PanelInput { configured: true, ..Default::default() };

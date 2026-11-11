@@ -702,14 +702,32 @@ fn draw_chat(ui: &mut Ui, state: &mut AgentPanel, input: &PanelInput, t: &Tokens
         }
 
         if input.chat.is_empty() && state.current.is_none() {
-            ui.add_space(24.0);
+            // An empty panel has to say what to do next, in text dark enough to read. One dim line in
+            // the middle of a large empty area reads as "this is broken", not "type below".
+            ui.add_space(40.0);
             ui.vertical_centered(|ui| {
+                ui.label(egui::RichText::new(crate::i18n::tr("Nothing here yet")).size(13.0).color(t.text));
+                ui.add_space(6.0);
                 let hint = if input.configured {
-                    crate::i18n::tr("Ask for a change to this file")
+                    crate::i18n::tr("Describe what to build, then press Send")
                 } else {
-                    crate::i18n::tr("Set the provider in Preferences")
+                    crate::i18n::tr("Set the provider in Preferences first")
                 };
-                ui.label(egui::RichText::new(hint).size(12.0).color(t.text_tertiary));
+                ui.label(egui::RichText::new(hint).size(11.0).color(t.text_secondary));
+                if input.configured {
+                    ui.add_space(14.0);
+                    // A first thing to try: an empty box with no example is where people stop.
+                    ui.label(egui::RichText::new(crate::i18n::tr("Try")).size(10.0).color(t.text_tertiary));
+                    for example in [
+                        crate::i18n::tr("Draw a card with a title and a button"),
+                        crate::i18n::tr("Make the selected frame blue"),
+                        crate::i18n::tr("Write requirements for this screen"),
+                    ] {
+                        if ui.add(egui::Label::new(egui::RichText::new(example).size(10.0).color(t.text_secondary)).sense(Sense::click())).clicked() {
+                            out.push(Request::Send { request: example.to_string() });
+                        }
+                    }
+                }
             });
         }
 
@@ -1104,7 +1122,10 @@ pub fn show(app: &mut crate::FigApp, ctx: &egui::Context) {
         .resizable(true)
         .default_size(size)
         .min_size(vec2(AGENT_PANEL_MIN, 320.0))
-        .anchor(Align2::RIGHT_TOP, vec2(-16.0, 64.0))
+        // No `.anchor()`: an anchored window cannot be dragged, and a panel that covers the canvas is
+        // one a person needs to move out of the way. egui remembers where it was dragged to, so the
+        // starting place is a `default_pos` and not a fixed one.
+        .default_pos(pos2(screen.max.x - size.x - 16.0, screen.min.y + 64.0))
         .frame(egui::Frame::NONE.fill(t.panel).stroke(Stroke::new(1.0, t.border_strong)).corner_radius(CornerRadius::same(8)))
         .show(ctx, |ui| {
             // Close button, in the header row the panel draws.

@@ -198,7 +198,12 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
         let pan = i.multi_touch().map_or(egui::Vec2::ZERO, |m| m.translation_delta);
         (i.modifiers, pan, i.zoom_delta(), i.pointer.hover_pos(), i.key_down(egui::Key::Space))
     });
-    let (wheel, zoom_delta) = wheel_zoom(app, &ctx, zoom_delta, mods.shift);
+    // The wheel belongs to the canvas only while the pointer is over it. `smooth_scroll_delta` is the
+    // whole window's, so reading it unconditionally made the canvas zoom while a panel scrolled --
+    // and because the canvas consumed the frame's scroll, the panel's own `ScrollArea` never moved.
+    // Its rect is known from the previous frame; before the first one, nothing is hovered anyway.
+    let over_canvas = hover_pos.is_some_and(|p| app.canvas.rect.contains(p));
+    let (wheel, zoom_delta) = if over_canvas { wheel_zoom(app, &ctx, zoom_delta, mods.shift) } else { (egui::Vec2::ZERO, 1.0) };
     let scroll = wheel + pan;
     let editing_text = app.session.ds().map(|d| d.text_edit.is_some()).unwrap_or(false);
     let typing_elsewhere = crate::a11y::field_focused(&ctx);

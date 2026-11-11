@@ -726,109 +726,110 @@ fn draw_chat(ui: &mut Ui, state: &mut AgentPanel, input: &PanelInput, t: &Tokens
     // conversation ran off the bottom with no way to reach it.
     let transcript_height = (transcript.height() - 4.0).max(32.0);
     egui::ScrollArea::vertical().max_height(transcript_height).auto_shrink([false, false]).stick_to_bottom(true).show(&mut area, |ui| {
-        ui.add_space(14.0);
-        // Content is inset on both sides: a bubble flush to the panel edge reads as clipped.
-        ui.add_space(0.0);
-        ui.set_max_width(ui.available_width() - 16.0);
-        // Room to breathe between turns: 6 packed a long conversation into a wall of text, which is
-        // most of why the panel read as cramped.
-        ui.spacing_mut().item_spacing.y = 10.0;
+        // All four sides: content against the panel's border reads as clipped.
+        egui::Frame::NONE.inner_margin(egui::Margin { left: 12, right: 12, top: 12, bottom: 10 }).show(ui, |ui| {
+            // Room to breathe between turns: 6 packed a long conversation into a wall of text, which is
+            // most of why the panel read as cramped.
+            ui.spacing_mut().item_spacing.y = 10.0;
 
-        // The summary compaction wrote, so an elided history is visible rather than surprising.
-        if let Some(summary) = &input.chat.summary {
-            bubble(ui, t, crate::i18n::tr("Earlier turns summarized"), summary, Kind::Note);
-        }
+            // The summary compaction wrote, so an elided history is visible rather than surprising.
+            if let Some(summary) = &input.chat.summary {
+                bubble(ui, t, crate::i18n::tr("Earlier turns summarized"), summary, Kind::Note);
+            }
 
-        if input.chat.is_empty() && state.current.is_none() {
-            // An empty panel has to say what to do next, in text dark enough to read. One dim line in
-            // the middle of a large empty area reads as "this is broken", not "type below".
-            ui.add_space(40.0);
-            ui.vertical_centered(|ui| {
-                ui.label(egui::RichText::new(crate::i18n::tr("Nothing here yet")).size(13.0).color(t.text));
-                ui.add_space(6.0);
-                let hint = if input.configured {
-                    crate::i18n::tr("Describe what to build, then press Send")
-                } else {
-                    crate::i18n::tr("Set the provider in Preferences first")
-                };
-                ui.label(egui::RichText::new(hint).size(11.0).color(t.text_secondary));
-                if input.configured {
-                    ui.add_space(14.0);
-                    // A first thing to try: an empty box with no example is where people stop.
-                    ui.label(egui::RichText::new(crate::i18n::tr("Try")).size(10.0).color(t.text_tertiary));
-                    for example in [
-                        crate::i18n::tr("Draw a card with a title and a button"),
-                        crate::i18n::tr("Make the selected frame blue"),
-                        crate::i18n::tr("Write requirements for this screen"),
-                    ] {
-                        if ui.add(egui::Label::new(egui::RichText::new(example).size(10.0).color(t.text_secondary)).sense(Sense::click())).clicked() {
-                            out.push(Request::Send { request: example.to_string() });
+            if input.chat.is_empty() && state.current.is_none() {
+                // An empty panel has to say what to do next, in text dark enough to read. One dim line in
+                // the middle of a large empty area reads as "this is broken", not "type below".
+                ui.add_space(40.0);
+                ui.vertical_centered(|ui| {
+                    ui.label(egui::RichText::new(crate::i18n::tr("Nothing here yet")).size(13.0).color(t.text));
+                    ui.add_space(6.0);
+                    let hint = if input.configured {
+                        crate::i18n::tr("Describe what to build, then press Send")
+                    } else {
+                        crate::i18n::tr("Set the provider in Preferences first")
+                    };
+                    ui.label(egui::RichText::new(hint).size(11.0).color(t.text_secondary));
+                    if input.configured {
+                        ui.add_space(14.0);
+                        // A first thing to try: an empty box with no example is where people stop.
+                        ui.label(egui::RichText::new(crate::i18n::tr("Try")).size(10.0).color(t.text_tertiary));
+                        for example in [
+                            crate::i18n::tr("Draw a card with a title and a button"),
+                            crate::i18n::tr("Make the selected frame blue"),
+                            crate::i18n::tr("Write requirements for this screen"),
+                        ] {
+                            if ui
+                                .add(egui::Label::new(egui::RichText::new(example).size(10.0).color(t.text_secondary)).sense(Sense::click()))
+                                .clicked()
+                            {
+                                out.push(Request::Send { request: example.to_string() });
+                            }
                         }
                     }
+                });
+            }
+
+            // Finished turns, oldest first.
+            for run in &input.chat.runs {
+                bubble(ui, t, &run.request, &run.request, Kind::Mine);
+                tools(ui, t, &run.tools, false);
+                if !run.answer.is_empty() {
+                    bubble(ui, t, "", &run.answer, Kind::Answer);
                 }
-            });
-        }
-
-        // Finished turns, oldest first.
-        for run in &input.chat.runs {
-            bubble(ui, t, &run.request, &run.request, Kind::Mine);
-            tools(ui, t, &run.tools, false);
-            if !run.answer.is_empty() {
-                bubble(ui, t, "", &run.answer, Kind::Answer);
-            }
-            if let Some(outcome) = run.outcome {
-                outcome_line(ui, t, outcome);
-            }
-        }
-
-        // The turn in flight.
-        if let Some(run) = state.current.clone() {
-            let running = state.is_running();
-            if !state.reasoning.is_empty() {
-                reasoning(ui, state, t);
-            }
-            if !run.answer.is_empty() {
-                bubble(ui, t, "", &run.answer, Kind::Answer);
-            }
-            tools(ui, t, &state.tools, running);
-            // What it is doing right now, animated. A turn runs for minutes with nothing on screen
-            // saying so, and a panel that looks idle while a model is working reads as broken.
-            if running {
-                working(ui, t, state);
-            }
-        } else if !state.tools.is_empty() {
-            tools(ui, t, &state.tools, false);
-        }
-
-        for note in &state.notices {
-            ui.label(egui::RichText::new(note).size(9.5).color(t.text_tertiary));
-        }
-        // A turn that wrote a requirements document says so and offers to show it: the answer reads
-        // "写好了" otherwise, and the document is in a tab the person is not looking at.
-        if let Some(written) = &state.wrote_requirements {
-            egui::Frame::NONE.fill(t.field).corner_radius(CornerRadius::same(6)).inner_margin(egui::Margin::symmetric(9, 7)).show(ui, |ui| {
-                ui.label(egui::RichText::new(crate::i18n::tr("Wrote a requirements document")).size(10.0).color(t.text));
-                ui.label(egui::RichText::new(written.as_str()).size(9.5).color(t.text_secondary));
-                ui.add_space(2.0);
-                if ui.add(egui::Button::new(crate::i18n::tr("Open Requirements")).min_size(vec2(120.0, 22.0))).clicked() {
-                    out.push(Request::ShowRequirements);
+                if let Some(outcome) = run.outcome {
+                    outcome_line(ui, t, outcome);
                 }
-            });
-        }
-        if let Some(error) = &state.error {
-            egui::Frame::NONE.fill(t.field).corner_radius(CornerRadius::same(6)).inner_margin(egui::Margin::symmetric(9, 7)).show(ui, |ui| {
-                ui.label(egui::RichText::new(error).size(10.0).color(t.text));
-                // The work is still here: a refused replay can be applied on request. Without this the
-                // only path is running the request again and waiting the same minutes.
-                if state.recoverable.is_some() {
-                    ui.add_space(4.0);
-                    if ui.add(egui::Button::new(crate::i18n::tr("Apply what it built")).min_size(vec2(120.0, 22.0))).clicked() {
-                        out.push(Request::ApplyRefused);
+            }
+
+            // The turn in flight.
+            if let Some(run) = state.current.clone() {
+                let running = state.is_running();
+                if !state.reasoning.is_empty() {
+                    reasoning(ui, state, t);
+                }
+                if !run.answer.is_empty() {
+                    bubble(ui, t, "", &run.answer, Kind::Answer);
+                }
+                tools(ui, t, &state.tools, running);
+                // What it is doing right now, animated. A turn runs for minutes with nothing on screen
+                // saying so, and a panel that looks idle while a model is working reads as broken.
+                if running {
+                    working(ui, t, state);
+                }
+            } else if !state.tools.is_empty() {
+                tools(ui, t, &state.tools, false);
+            }
+
+            for note in &state.notices {
+                ui.label(egui::RichText::new(note).size(9.5).color(t.text_tertiary));
+            }
+            // A turn that wrote a requirements document says so and offers to show it: the answer reads
+            // "写好了" otherwise, and the document is in a tab the person is not looking at.
+            if let Some(written) = &state.wrote_requirements {
+                egui::Frame::NONE.fill(t.field).corner_radius(CornerRadius::same(6)).inner_margin(egui::Margin::symmetric(9, 7)).show(ui, |ui| {
+                    ui.label(egui::RichText::new(crate::i18n::tr("Wrote a requirements document")).size(10.0).color(t.text));
+                    ui.label(egui::RichText::new(written.as_str()).size(9.5).color(t.text_secondary));
+                    ui.add_space(2.0);
+                    if ui.add(egui::Button::new(crate::i18n::tr("Open Requirements")).min_size(vec2(120.0, 22.0))).clicked() {
+                        out.push(Request::ShowRequirements);
                     }
-                }
-            });
-        }
-        ui.add_space(6.0);
+                });
+            }
+            if let Some(error) = &state.error {
+                egui::Frame::NONE.fill(t.field).corner_radius(CornerRadius::same(6)).inner_margin(egui::Margin::symmetric(9, 7)).show(ui, |ui| {
+                    ui.label(egui::RichText::new(error).size(10.0).color(t.text));
+                    // The work is still here: a refused replay can be applied on request. Without this the
+                    // only path is running the request again and waiting the same minutes.
+                    if state.recoverable.is_some() {
+                        ui.add_space(4.0);
+                        if ui.add(egui::Button::new(crate::i18n::tr("Apply what it built")).min_size(vec2(120.0, 22.0))).clicked() {
+                            out.push(Request::ApplyRefused);
+                        }
+                    }
+                });
+            }
+        });
     });
 
     // The composer, pinned below the scroll area so it never scrolls away.
@@ -1171,35 +1172,35 @@ fn draw_requirements_editor(
     let ui = &mut area;
     let form_height = (form.height() - 4.0).max(32.0);
     egui::ScrollArea::vertical().max_height(form_height).auto_shrink([false, false]).id_salt("requirements-editor").show(ui, |ui| {
-        // Inset from the panel edge, and inset on both sides: content pinned to the left edge of a
-        // window reads as clipped rather than as a form.
-        ui.add_space(12.0);
-        ui.spacing_mut().item_spacing.y = 9.0;
-        let width = (ui.available_width() - 28.0).max(80.0);
+        // A frame is what insets on all four sides: `add_space` before the content only moved it down,
+        // so the labels still sat against the panel's left border.
+        egui::Frame::NONE.inner_margin(egui::Margin { left: 14, right: 14, top: 12, bottom: 10 }).show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 9.0;
+            let width = (ui.available_width() - 6.0).max(80.0);
 
-        /// A labelled multi-line field: a label, then the box, both in the flow.
-        fn field(ui: &mut Ui, t: &Tokens, label: &str, value: &mut String, rows: usize, width: f32) {
-            ui.label(egui::RichText::new(label).size(9.5).color(t.text_tertiary));
-            ui.add(
-                egui::TextEdit::multiline(value)
-                    .desired_width(width)
-                    .desired_rows(rows)
-                    .frame(egui::Frame::NONE.fill(t.field).corner_radius(CornerRadius::same(4)).inner_margin(egui::Margin::symmetric(6, 5))),
-            );
-        }
+            /// A labelled multi-line field: a label, then the box, both in the flow.
+            fn field(ui: &mut Ui, t: &Tokens, label: &str, value: &mut String, rows: usize, width: f32) {
+                ui.label(egui::RichText::new(label).size(9.5).color(t.text_tertiary));
+                ui.add(
+                    egui::TextEdit::multiline(value)
+                        .desired_width(width)
+                        .desired_rows(rows)
+                        .frame(egui::Frame::NONE.fill(t.field).corner_radius(CornerRadius::same(4)).inner_margin(egui::Margin::symmetric(6, 5))),
+                );
+            }
 
-        field(ui, t, crate::i18n::tr("Title"), &mut draft.title, 1, width);
-        field(ui, t, crate::i18n::tr("Summary"), &mut draft.summary, 2, width);
-        field(ui, t, crate::i18n::tr("Goals (one per line)"), &mut draft.goals, 3, width);
-        field(ui, t, crate::i18n::tr("Non-goals"), &mut draft.non_goals, 2, width);
-        field(ui, t, crate::i18n::tr("Audiences"), &mut draft.audiences, 2, width);
-        field(ui, t, crate::i18n::tr("Requirements (title, priority, detail)"), &mut draft.requirements, 6, width);
-        field(ui, t, crate::i18n::tr("Acceptance criteria"), &mut draft.acceptance_criteria, 3, width);
-        field(ui, t, crate::i18n::tr("Open questions"), &mut draft.open_questions, 2, width);
-        if let Some(note) = &state.export_note {
-            ui.label(egui::RichText::new(note.as_str()).size(9.0).color(t.text_tertiary));
-        }
-        ui.add_space(10.0);
+            field(ui, t, crate::i18n::tr("Title"), &mut draft.title, 1, width);
+            field(ui, t, crate::i18n::tr("Summary"), &mut draft.summary, 2, width);
+            field(ui, t, crate::i18n::tr("Goals (one per line)"), &mut draft.goals, 3, width);
+            field(ui, t, crate::i18n::tr("Non-goals"), &mut draft.non_goals, 2, width);
+            field(ui, t, crate::i18n::tr("Audiences"), &mut draft.audiences, 2, width);
+            field(ui, t, crate::i18n::tr("Requirements (title, priority, detail)"), &mut draft.requirements, 6, width);
+            field(ui, t, crate::i18n::tr("Acceptance criteria"), &mut draft.acceptance_criteria, 3, width);
+            field(ui, t, crate::i18n::tr("Open questions"), &mut draft.open_questions, 2, width);
+            if let Some(note) = &state.export_note {
+                ui.label(egui::RichText::new(note.as_str()).size(9.0).color(t.text_tertiary));
+            }
+        });
     });
 
     // The action bar: part of the panel, so it is always on screen however long the form is.

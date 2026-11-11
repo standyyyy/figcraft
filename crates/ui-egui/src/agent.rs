@@ -566,7 +566,7 @@ use crate::a11y::Tip as _;
 use crate::icons::Icon;
 use crate::theme::Tokens;
 use crate::widgets;
-use egui::{Align, Align2, CornerRadius, Id, Layout, Rect, Sense, Stroke, Ui, Vec2, pos2, vec2};
+use egui::{Align, Align2, CornerRadius, Id, Layout, Rect, Sense, Stroke, Ui, pos2, vec2};
 
 /// What a connection test is doing, kept across frames.
 ///
@@ -1146,96 +1146,86 @@ fn draw_requirements_editor(
     t: &Tokens,
     body: Rect,
     draft: &mut RequirementsDraft,
-    y: &mut f32,
+    _y: &mut f32,
     out: &mut PanelOutput,
 ) {
-    let field_w = body.width() - 24.0;
-    let draw_field = |ui: &mut Ui, y: &mut f32, label: &str, value: &mut String, height: f32| {
-        if *y + height + 16.0 > body.max.y - 44.0 {
-            return;
-        }
-        ui.painter().text(
-            pos2(body.min.x + 12.0, *y + 6.0),
-            Align2::LEFT_CENTER,
-            crate::i18n::tr(label),
-            crate::theme::regular(9.0),
-            t.text_tertiary,
-        );
-        *y += 14.0;
-        let r = Rect::from_min_size(pos2(body.min.x + 12.0, *y), vec2(field_w, height));
-        ui.painter().rect_filled(r, CornerRadius::same(4), t.field);
-        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(r.shrink(4.0)).layout(Layout::top_down(Align::LEFT)));
-        child.add(egui::TextEdit::multiline(value).desired_width(r.width() - 8.0).desired_rows((height / 16.0) as usize).frame(egui::Frame::NONE));
-        *y += height + 6.0;
-    };
-    draw_field(ui, y, "Title", &mut draft.title, 24.0);
-    draw_field(ui, y, "Summary", &mut draft.summary, 40.0);
-    draw_field(ui, y, "Goals (one per line)", &mut draft.goals, 40.0);
-    draw_field(ui, y, "Non-goals", &mut draft.non_goals, 32.0);
-    draw_field(ui, y, "Requirements (title | priority | detail)", &mut draft.requirements, 56.0);
-    draw_field(ui, y, "Acceptance criteria", &mut draft.acceptance_criteria, 32.0);
-    draw_field(ui, y, "Open questions", &mut draft.open_questions, 32.0);
+    // A fixed action bar at the bottom and a scrolling form above it. The old version painted every
+    // field at a hand-computed y with `painter().text()`, so a long title ran across the field below
+    // it and the Back button -- drawn at `body.max.y - 34`, below seven fields -- fell off the panel
+    // as soon as the form was taller than the window.
+    const BAR: f32 = 78.0;
+    let form = Rect::from_min_max(body.min, pos2(body.max.x, body.max.y - BAR));
+    let bar = Rect::from_min_max(pos2(body.min.x, form.max.y), body.max);
 
-    // Actions: save is disabled without a title, because the command would refuse it.
-    let row = Rect::from_min_size(pos2(body.min.x + 12.0, body.max.y - 34.0), vec2(field_w, 24.0));
-    let saveable = draft.is_saveable() && !state.is_running();
-    let save = Rect::from_min_size(row.min, vec2(60.0, 22.0));
-    let resp = ui.interact(save, Id::unique("req-save"), Sense::click()).tip(crate::i18n::tr("Save"));
-    ui.painter().rect_filled(save, CornerRadius::same(5), if saveable { t.accent } else { t.field });
-    ui.painter().text(
-        save.center(),
-        Align2::CENTER_CENTER,
-        crate::i18n::tr("Save"),
-        crate::theme::semibold(11.0),
-        if saveable { t.accent_on } else { t.text_tertiary },
-    );
-    if resp.clicked() && saveable {
-        out.push(Request::SaveRequirements { params: draft.to_params() });
-    }
-    // Export needs a saved document (an unsaved one has no id to export).
-    let export = Rect::from_min_size(pos2(save.max.x + 6.0, row.min.y), vec2(60.0, 22.0));
-    let can_export = draft.id.is_some();
-    let resp = ui.interact(export, Id::unique("req-export"), Sense::click()).tip(crate::i18n::tr("Export as Markdown"));
-    ui.painter().rect_filled(export, CornerRadius::same(5), t.field);
-    ui.painter().text(
-        export.center(),
-        Align2::CENTER_CENTER,
-        crate::i18n::tr("Export"),
-        crate::theme::semibold(11.0),
-        if can_export { t.text } else { t.text_tertiary },
-    );
-    if let (true, Some(id)) = (resp.clicked() && can_export, draft.id.clone()) {
-        out.push(Request::ExportRequirements { id });
-    }
-    // Delete, only for a saved document.
-    let del = Rect::from_min_size(pos2(export.max.x + 6.0, row.min.y), vec2(58.0, 22.0));
-    let resp = ui.interact(del, Id::unique("req-delete"), Sense::click()).tip(crate::i18n::tr("Delete"));
-    ui.painter().text(del.center(), Align2::CENTER_CENTER, crate::i18n::tr("Delete"), crate::theme::regular(10.0), t.text_secondary);
-    if resp.clicked() {
-        if let Some(id) = draft.id.clone() {
-            out.push(Request::DeleteRequirements { id });
-        } else {
-            out.push(Request::CloseRequirements);
+    let mut area = ui.new_child(egui::UiBuilder::new().max_rect(form).layout(Layout::top_down(Align::Min)));
+    let ui = &mut area;
+    egui::ScrollArea::vertical().auto_shrink([false, false]).id_salt("requirements-editor").show(ui, |ui| {
+        ui.add_space(10.0);
+        ui.spacing_mut().item_spacing.y = 8.0;
+        let width = ui.available_width() - 4.0;
+
+        /// A labelled multi-line field: a label, then the box, both in the flow.
+        fn field(ui: &mut Ui, t: &Tokens, label: &str, value: &mut String, rows: usize, width: f32) {
+            ui.label(egui::RichText::new(label).size(9.5).color(t.text_tertiary));
+            ui.add(
+                egui::TextEdit::multiline(value)
+                    .desired_width(width)
+                    .desired_rows(rows)
+                    .frame(egui::Frame::NONE.fill(t.field).corner_radius(CornerRadius::same(4)).inner_margin(egui::Margin::symmetric(6, 5))),
+            );
         }
-    }
-    // Back to the list.
-    let back = Rect::from_min_size(pos2(del.max.x + 6.0, row.min.y), vec2(44.0, 22.0));
-    let resp = ui.interact(back, Id::unique("req-back"), Sense::click()).tip(crate::i18n::tr("Back"));
-    ui.painter().text(back.center(), Align2::CENTER_CENTER, crate::i18n::tr("Back"), crate::theme::regular(10.0), t.text_secondary);
-    if resp.clicked() {
+
+        field(ui, t, crate::i18n::tr("Title"), &mut draft.title, 1, width);
+        field(ui, t, crate::i18n::tr("Summary"), &mut draft.summary, 2, width);
+        field(ui, t, crate::i18n::tr("Goals (one per line)"), &mut draft.goals, 3, width);
+        field(ui, t, crate::i18n::tr("Non-goals"), &mut draft.non_goals, 2, width);
+        field(ui, t, crate::i18n::tr("Audiences"), &mut draft.audiences, 2, width);
+        field(ui, t, crate::i18n::tr("Requirements (title, priority, detail)"), &mut draft.requirements, 6, width);
+        field(ui, t, crate::i18n::tr("Acceptance criteria"), &mut draft.acceptance_criteria, 3, width);
+        field(ui, t, crate::i18n::tr("Open questions"), &mut draft.open_questions, 2, width);
+        if let Some(note) = &state.export_note {
+            ui.label(egui::RichText::new(note.as_str()).size(9.0).color(t.text_tertiary));
+        }
+        ui.add_space(8.0);
+    });
+
+    // The action bar: part of the panel, so it is always on screen however long the form is.
+    ui.painter().rect_filled(bar, CornerRadius::ZERO, t.panel);
+    ui.painter().line_segment([bar.min, pos2(bar.max.x, bar.min.y)], Stroke::new(1.0, t.border));
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(bar.shrink2(vec2(10.0, 7.0))).layout(Layout::top_down(Align::Min)));
+    let ui = &mut child;
+    ui.spacing_mut().item_spacing.y = 5.0;
+
+    // Back is first and always present: leaving a form must never depend on the form's height.
+    if ui.add(egui::Button::new(crate::i18n::tr("Back to the list")).min_size(vec2(0.0, 22.0))).clicked() {
         out.push(Request::CloseRequirements);
     }
-    if let Some(note) = &state.export_note {
-        ui.painter().text(
-            pos2(body.min.x + 12.0, body.max.y - 42.0),
-            Align2::LEFT_CENTER,
-            widgets::elide_font(ui, note, field_w, crate::theme::regular(9.0)),
-            crate::theme::regular(9.0),
-            t.text_tertiary,
-        );
-    }
+    ui.horizontal(|ui| {
+        let saveable = draft.is_saveable() && !state.is_running();
+        if ui.add_enabled(saveable, egui::Button::new(crate::i18n::tr("Save")).min_size(vec2(60.0, 22.0))).clicked() {
+            out.push(Request::SaveRequirements { params: draft.to_params() });
+        }
+        // Export needs a saved document: an unsaved one has no id.
+        let can_export = draft.id.is_some();
+        let export = ui.add_enabled(can_export, egui::Button::new(crate::i18n::tr("Export")).min_size(vec2(60.0, 22.0)));
+        if export.on_hover_text(crate::i18n::tr("Export as Markdown")).clicked()
+            && let Some(id) = draft.id.clone()
+        {
+            out.push(Request::ExportRequirements { id });
+        }
+        if ui.add(egui::Button::new(crate::i18n::tr("Delete")).min_size(vec2(58.0, 22.0))).clicked() {
+            match draft.id.clone() {
+                Some(id) => out.push(Request::DeleteRequirements { id }),
+                None => out.push(Request::CloseRequirements),
+            }
+        }
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if let Some(id) = &draft.id {
+                ui.label(egui::RichText::new(id.as_str()).size(9.0).color(t.text_tertiary));
+            }
+        });
+    });
     let _ = input;
-    let _ = Vec2::ZERO;
 }
 
 // ---------- the window ----------

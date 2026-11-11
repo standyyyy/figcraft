@@ -1787,6 +1787,7 @@ status = "draft — needs native review"
 "Working" = "正在处理"
 "Working…" = "正在处理…"
 "Write requirements" = "编写需求"
+"Apply what it built" = "仍然应用画好的内容"
 [commands]
 "align.bottom" = "底部对齐"
 "align.hcenter" = "水平居中对齐"

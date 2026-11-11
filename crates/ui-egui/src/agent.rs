@@ -69,6 +69,13 @@ pub struct AgentPanel {
     pub error: Option<String>,
     /// The undo label the last commit used (shown so a person can find the step).
     pub last_undo_label: Option<String>,
+    /// A replay whose commit was refused because the document moved on.
+    ///
+    /// Kept, not discarded: a turn takes minutes and its commands are absolute (`node.create` with a
+    /// parent id), so applying them to the document as it is now is safe and is what a person wants --
+    /// the alternative is losing the work and asking again. The panel offers it as a button; nothing
+    /// applies it without a click.
+    pub recoverable: Option<figcraft_agent::CommitEnvelope>,
     /// The requirements document open in the Requirements tab (`None`: the list).
     pub editing: Option<String>,
     /// The Requirements tab's draft fields while a document is open.
@@ -201,6 +208,7 @@ impl AgentPanel {
             show_reasoning: false,
             error: None,
             last_undo_label: None,
+            recoverable: None,
             editing: None,
             requirements_draft: None,
             export_note: None,
@@ -431,6 +439,11 @@ pub enum Request {
     ExportRequirements { id: String },
     /// Leave the requirements editor.
     CloseRequirements,
+    /// Apply a replay whose commit was refused because the document had moved on.
+    ///
+    /// A person's decision, never automatic: the document changed, so what the Agent built may be out
+    /// of date, but it is their work to keep or drop.
+    ApplyRefused,
 }
 
 impl AgentPanel {
@@ -774,6 +787,14 @@ fn draw_chat(ui: &mut Ui, state: &mut AgentPanel, input: &PanelInput, t: &Tokens
         if let Some(error) = &state.error {
             egui::Frame::NONE.fill(t.field).corner_radius(CornerRadius::same(6)).inner_margin(egui::Margin::symmetric(9, 7)).show(ui, |ui| {
                 ui.label(egui::RichText::new(error).size(10.0).color(t.text));
+                // The work is still here: a refused replay can be applied on request. Without this the
+                // only path is running the request again and waiting the same minutes.
+                if state.recoverable.is_some() {
+                    ui.add_space(4.0);
+                    if ui.add(egui::Button::new(crate::i18n::tr("Apply what it built")).min_size(vec2(120.0, 22.0))).clicked() {
+                        out.push(Request::ApplyRefused);
+                    }
+                }
             });
         }
         ui.add_space(6.0);
@@ -1494,7 +1515,12 @@ fn commit_turn(app: &mut crate::FigApp, envelope: &figcraft_agent::CommitEnvelop
     };
     let (uid, revision) = (ds.uid, ds.revision);
     if let Some(reason) = envelope.refusal(uid, revision) {
-        let why = format!("{reason}, so its changes were not applied. Run the request again.");
+        // Kept so the work is not lost: the replay is absolute commands, so it can still be applied to
+        // the document as it is now. The panel shows a button; nothing applies it on its own.
+        if let Some(panel) = app.ui.agent.as_mut() {
+            panel.recoverable = Some(envelope.clone());
+        }
+        let why = format!("{reason}, so its changes were not applied. Apply them anyway, or run the request again.");
         set_conflict(app, &why);
         return ApplyDisposition::Conflict(why);
     }
@@ -1652,6 +1678,7 @@ pub fn perform_requests(app: &mut crate::FigApp) {
                     start_turn(app, &request);
                 }
             }
+            Request::ApplyRefused => apply_refused(app),
             Request::CloseRequirements => {}
         }
     }
@@ -1725,6 +1752,29 @@ fn record_turn(
 fn continuation_for(app: &mut crate::FigApp) -> Vec<serde_json::Value> {
     let conversation = conversation_id_of(app);
     app.ui.agent_transcript.conversations.iter().find(|c| c.id == conversation).map(|c| c.continuation.clone()).unwrap_or_default()
+}
+
+/// Apply the replay a conflict refused, because a person asked for it.
+///
+/// The replay's commands are absolute -- `node.create` with its parent, `node.set` with its values --
+/// so applying them to the document as it is now produces the layer the Agent built, whatever else
+/// happened to the document meanwhile. The revision guard exists to stop that happening *silently*;
+/// this is the same apply with the person's consent, and it is still one `command.batch`.
+fn apply_refused(app: &mut crate::FigApp) {
+    let Some(envelope) = app.ui.agent.as_ref().and_then(|p| p.recoverable.clone()) else { return };
+    let batch = serde_json::json!({ "label": envelope.undo_label, "commands": envelope.batch_commands() });
+    match app.session.execute("command.batch", &batch) {
+        Ok(_) => {
+            if let Some(panel) = app.ui.agent.as_mut() {
+                panel.recoverable = None;
+                panel.status = RunStatus::Done;
+                panel.error = None;
+                panel.last_undo_label = Some(envelope.undo_label.clone());
+            }
+        }
+        // The batch rolled itself back, so nothing landed; say so and keep the offer.
+        Err(e) => set_conflict(app, &format!("the Agent's changes could not be applied together: {e}")),
+    }
 }
 
 /// Export a requirements document as a Markdown file, in full.

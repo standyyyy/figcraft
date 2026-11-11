@@ -1227,3 +1227,72 @@ fn the_reasoning_pane_toggles() {
         assert!(panel.show_reasoning);
     }
 }
+
+// ---------- a refused replay is kept, not thrown away ----------
+
+#[test]
+fn a_revision_conflict_keeps_the_replay_so_the_work_is_not_lost() {
+    // A turn takes minutes and its commands are absolute, so the work survives a conflict: the panel
+    // keeps the envelope and offers to apply it. Discarding it is what made a conflict mean "do it all
+    // again".
+    let mut app = harness_with(true);
+    let (uid, revision) = current(&app);
+    app.ui.agent_host = Some(Box::new(TerminalHost(None)));
+    app.ui.agent_requests.push(Request::Send { request: "draw".into() });
+    crate::agent::perform_requests(&mut app);
+    let turn = app.ui.agent_turn;
+
+    let step = figcraft_agent::shadow::ReplayStep {
+        command: "node.create".into(),
+        params: serde_json::json!({"type": "rectangle", "width": 10.0, "height": 10.0}),
+    };
+    let envelope = figcraft_agent::CommitEnvelope::new(turn, uid, revision + 9, vec![step], "AI: draw");
+    app.ui.agent_host = Some(Box::new(TerminalHost(Some(figcraft_agent::TurnTerminal::Success {
+        turn,
+        answer: "done".into(),
+        commit: Some(envelope),
+        continuation: Vec::new(),
+    }))));
+    crate::agent::poll_host(&mut app);
+
+    let panel = app.ui.agent.as_ref().expect("panel");
+    assert_eq!(panel.status, RunStatus::Conflict, "refused");
+    assert!(panel.recoverable.is_some(), "but the work is kept");
+    // A new file is one page and no layers; the refused replay added nothing.
+    assert_eq!(app.session.undo_depth().0, 0, "and nothing was applied without a click");
+}
+
+#[test]
+fn applying_a_refused_replay_lands_it_as_one_undo_step() {
+    // The person's decision: the document moved on, but the Agent's commands are absolute, so applying
+    // them now produces what it built.
+    let mut app = harness_with(true);
+    let (uid, revision) = current(&app);
+    app.ui.agent_host = Some(Box::new(TerminalHost(None)));
+    app.ui.agent_requests.push(Request::Send { request: "draw".into() });
+    crate::agent::perform_requests(&mut app);
+    let turn = app.ui.agent_turn;
+
+    let step = figcraft_agent::shadow::ReplayStep {
+        command: "node.create".into(),
+        params: serde_json::json!({"type": "rectangle", "width": 10.0, "height": 10.0}),
+    };
+    let envelope = figcraft_agent::CommitEnvelope::new(turn, uid, revision + 9, vec![step], "AI: draw");
+    app.ui.agent_host = Some(Box::new(TerminalHost(Some(figcraft_agent::TurnTerminal::Success {
+        turn,
+        answer: "done".into(),
+        commit: Some(envelope),
+        continuation: Vec::new(),
+    }))));
+    crate::agent::poll_host(&mut app);
+    assert_eq!(app.session.undo_depth().0, 0, "refused: no undo step");
+
+    app.ui.agent_requests.push(Request::ApplyRefused);
+    crate::agent::perform_requests(&mut app);
+
+    assert_eq!(app.session.undo_depth().0, 1, "the replay landed as one undo step");
+    let panel = app.ui.agent.as_ref().expect("panel");
+    assert_eq!(panel.status, RunStatus::Done);
+    assert!(panel.recoverable.is_none(), "the offer is spent");
+    assert!(panel.error.is_none(), "and the error is cleared");
+}

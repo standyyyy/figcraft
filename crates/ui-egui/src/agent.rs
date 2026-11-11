@@ -758,6 +758,11 @@ fn draw_chat(ui: &mut Ui, state: &mut AgentPanel, input: &PanelInput, t: &Tokens
                 bubble(ui, t, "", &run.answer, Kind::Answer);
             }
             tools(ui, t, &state.tools, running);
+            // What it is doing right now, animated. A turn runs for minutes with nothing on screen
+            // saying so, and a panel that looks idle while a model is working reads as broken.
+            if running {
+                working(ui, t, state);
+            }
         } else if !state.tools.is_empty() {
             tools(ui, t, &state.tools, false);
         }
@@ -819,6 +824,51 @@ fn bubble(ui: &mut Ui, t: &Tokens, title: &str, text: &str, kind: Kind) {
     });
 }
 
+/// The "still working" line: a spinner and what the turn is doing at the moment.
+///
+/// The spinner is egui's, so it animates and requests its own repaint: a static dot would be
+/// indistinguishable from a frozen window.
+fn working(ui: &mut Ui, t: &Tokens, state: &AgentPanel) {
+    ui.horizontal(|ui| {
+        ui.add(egui::Spinner::new().size(11.0).color(t.accent));
+        // The most recent tool says what it is on: no tool yet means the model is still reading the
+        // request, which is the longest wait and the one most worth naming.
+        let label = match state.tools.last() {
+            Some(row) if row.ok => crate::i18n::tr("Working…"),
+            Some(row) => tool_label(&row.name),
+            None if !state.reasoning.is_empty() => crate::i18n::tr("Thinking…"),
+            None => crate::i18n::tr("Reading the request…"),
+        };
+        ui.label(egui::RichText::new(label).size(9.5).color(t.text_secondary));
+    });
+}
+
+/// What a tool call is called in the panel, in the interface's language.
+///
+/// The catalog names its tools in English because a model reads those definitions; a person reading
+/// the panel should not have to. An unknown name falls back to the id, so a tool added to the catalog
+/// still shows something rather than nothing.
+fn tool_label(name: &str) -> &'static str {
+    match name {
+        "batch" => crate::i18n::tr("Edit several things at once"),
+        "create_node" => crate::i18n::tr("Add a layer"),
+        "set_properties" => crate::i18n::tr("Change properties"),
+        "run_command" => crate::i18n::tr("Run a command"),
+        "list_commands" => crate::i18n::tr("Look up commands"),
+        "inspect_document" => crate::i18n::tr("Look at the document"),
+        "get_node" => crate::i18n::tr("Look at a layer"),
+        "select" => crate::i18n::tr("Select layers"),
+        "screenshot" => crate::i18n::tr("Take a screenshot"),
+        "type_text" => crate::i18n::tr("Type text"),
+        "inspect_ui" => crate::i18n::tr("Look at the interface"),
+        "list_requirements" => crate::i18n::tr("List requirements"),
+        "get_requirements" => crate::i18n::tr("Read requirements"),
+        "upsert_requirements" => crate::i18n::tr("Write requirements"),
+        "render_requirements_markdown" => crate::i18n::tr("Render requirements"),
+        _ => crate::i18n::tr("Working"),
+    }
+}
+
 /// The tool calls of a turn, as quiet one-line strips.
 fn tools(ui: &mut Ui, t: &Tokens, rows: &[ToolCall], running: bool) {
     if rows.is_empty() {
@@ -838,7 +888,7 @@ fn tools(ui: &mut Ui, t: &Tokens, rows: &[ToolCall], running: bool) {
             let colour = if row.ok { t.accent_text } else { t.text_tertiary };
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(mark).size(9.0).color(colour));
-                ui.label(egui::RichText::new(&row.name).size(9.0).color(t.text_secondary));
+                ui.label(egui::RichText::new(tool_label(&row.name)).size(9.0).color(t.text_secondary));
             });
         }
     });

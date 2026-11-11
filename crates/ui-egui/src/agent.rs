@@ -689,6 +689,11 @@ fn draw_chat(ui: &mut Ui, state: &mut AgentPanel, input: &PanelInput, t: &Tokens
     let transcript = Rect::from_min_max(body.min, pos2(body.max.x, body.max.y - COMPOSER));
     let composer = Rect::from_min_max(pos2(body.min.x, transcript.max.y), body.max);
 
+    // A window is not opaque by itself: its frame paints the border and the rounded corners, and
+    // anything inside that does not paint shows the canvas through. The transcript has to say it is
+    // part of the panel, or a conversation sits over a see-through hole.
+    ui.painter().rect_filled(transcript, CornerRadius::ZERO, t.panel);
+
     // The transcript scrolls. It is the one part of this panel that grows without limit, and drawing it
     // to fixed geometry meant a long conversation simply ran off the bottom with no way to reach it.
     let mut area = ui.new_child(egui::UiBuilder::new().max_rect(transcript).layout(Layout::top_down(Align::Min)));
@@ -879,6 +884,9 @@ fn outcome_line(ui: &mut Ui, t: &Tokens, outcome: Outcome) {
 /// Native widgets: a `TextEdit` that wraps, real buttons that show their own hover and disabled states,
 /// and Enter to send (Shift+Enter for a newline) -- what anyone expects of a chat box.
 fn draw_composer(ui: &mut Ui, state: &mut AgentPanel, input: &PanelInput, t: &Tokens, area: Rect, out: &mut PanelOutput) {
+    // The composer is part of the window too: without a fill the field sits over whatever is behind the
+    // panel, and the divider line would be floating in the canvas.
+    ui.painter().rect_filled(area, CornerRadius::ZERO, t.panel);
     ui.painter().line_segment([area.min, pos2(area.max.x, area.min.y)], Stroke::new(1.0, t.border));
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(area.shrink2(vec2(12.0, 8.0))).layout(Layout::top_down(Align::Min)));
     let ui = &mut child;

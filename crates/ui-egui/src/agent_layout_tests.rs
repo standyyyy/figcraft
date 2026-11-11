@@ -5,12 +5,40 @@
 //! panel stays usable) without a person having to look at a picture, and it fails when a control
 //! grows past its box.
 
-use egui::{Rect, pos2, vec2};
+use egui::{Pos2, Rect, pos2, vec2};
 
 use crate::agent::{AGENT_PANEL_MIN, AGENT_PANEL_WIDTH, AgentPanel, AgentTab, PanelInput, RequirementsDraft, panel};
 use crate::agent_host::HostStatus;
 
 /// Lay the panel out in a `width` x `height` box and return the rects it drew, by control name.
+/// Lay the panel out and return whether the shapes it emitted fill `probe` opaquely.
+///
+/// A window's frame paints only its border and corners; anything inside that does not paint shows the
+/// canvas through. This counts filled rectangles that cover `probe`'s centre, which is what tells a
+/// solid panel from a see-through one.
+fn covers(width: f32, height: f32, probe: Pos2, state: &mut AgentPanel, input: &PanelInput) -> usize {
+    let ctx = egui::Context::default();
+    let screen = Rect::from_min_size(Pos2::ZERO, vec2(width, height));
+    let raw = egui::RawInput { screen_rect: Some(screen), time: Some(0.0), ..Default::default() };
+    let mut out = ctx.run_ui(raw, |ui| {
+        let _ = panel(ui, state, input);
+    });
+    out.textures_delta.clear();
+    let out = out;
+    let mut filled = 0;
+    for clipped in out.shapes {
+        // A window's fill, a tab's selected row and a bubble are all `RectShape`s with a fill; the one
+        // that covers the probe is what makes the panel solid there.
+        if let egui::epaint::Shape::Rect(r) = &clipped.shape
+            && r.rect.contains(probe)
+            && r.fill != egui::Color32::TRANSPARENT
+        {
+            filled += 1;
+        }
+    }
+    filled
+}
+
 fn layout(width: f32, height: f32, state: &mut AgentPanel, input: &PanelInput) -> (egui::Context, Rect) {
     let ctx = egui::Context::default();
     let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(width, height));
@@ -138,4 +166,29 @@ fn a_taller_window_gives_the_conversation_more_room() {
     let little = (520.0_f32 - 96.0).clamp(320.0, 1600.0);
     assert!(lots > 720.0, "a tall window is no longer capped at 720: {lots}");
     assert!(little >= 320.0, "a short one still has a usable minimum: {little}");
+}
+
+#[test]
+fn the_chat_tab_paints_its_own_background() {
+    // The regression this pins: a rewrite of the chat tab dropped the fill under the transcript and the
+    // composer, so a conversation sat over a see-through hole in the panel -- the canvas showed through
+    // the middle of the window. Text and buttons do not imply a background; something has to paint it.
+    let mut state = AgentPanel::new("doc-1");
+    let input = PanelInput { configured: true, ..Default::default() };
+    // The middle of the transcript area, well below the header and above the composer.
+    let middle = pos2(160.0, 300.0);
+    assert!(covers(320.0, 620.0, middle, &mut state, &input) > 0, "the transcript area is filled");
+    // The composer sits at the bottom of the same body.
+    let composer = pos2(160.0, 620.0 - 46.0);
+    assert!(covers(320.0, 620.0, composer, &mut state, &input) > 0, "the composer is filled too");
+}
+
+#[test]
+fn the_requirements_tab_paints_its_own_background() {
+    // The same rule for the other tab: it kept its fill when the chat tab lost one, which is how the
+    // difference was spotted.
+    let mut state = AgentPanel::new("doc-1");
+    state.tab = AgentTab::Requirements;
+    let input = PanelInput { configured: true, ..Default::default() };
+    assert!(covers(320.0, 620.0, pos2(160.0, 300.0), &mut state, &input) > 0, "the requirements body is filled");
 }

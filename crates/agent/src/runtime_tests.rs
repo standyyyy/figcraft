@@ -446,3 +446,40 @@ fn a_connection_test_that_cannot_build_a_config_says_so_without_a_request() {
         other => panic!("expected a failure, got {other:?}"),
     }
 }
+
+// ---------- the design system is part of the prompt ----------
+
+#[test]
+fn the_prompt_carries_the_tdesign_values_a_screen_needs() {
+    // A prototype built without these is guesswork: a button in the wrong blue and a 12 px title with
+    // a 12 px line height look wrong without anyone being able to say why.
+    let p = crate::runtime_prompt::SYSTEM_PROMPT;
+    for required in [
+        "#0052D9", // the main brand colour
+        "#366EF4", // hover
+        "#F2F3FF", // light brand background
+        "#1A1D1F", // main text
+        "2BA471",  // success
+        "D54941",  // error
+        "insert_icon",
+        "list_icons",
+        "PingFang SC",
+        "radius-default",
+    ] {
+        assert!(p.contains(required), "the prompt tells the model about `{required}`");
+    }
+    // Type sizes must be given with their line heights, not as bare sizes.
+    for pair in ["12/20", "14/22", "16/24", "18/28", "24/32"] {
+        assert!(p.contains(pair), "the prompt pairs the size with its line height: `{pair}`");
+    }
+}
+
+#[test]
+fn the_prompt_says_to_use_the_icon_tool_rather_than_drawing_icons() {
+    // Drawn-from-rectangles icons and emoji are what a model reaches for when it has no icon source;
+    // both look wrong in a TDesign screen.
+    let p = crate::runtime_prompt::SYSTEM_PROMPT.to_lowercase();
+    assert!(p.contains("insert_icon"), "it names the tool");
+    assert!(p.contains("do not draw an icon") || p.contains("do not draw an icon out of"), "it rules out redrawing");
+    assert!(p.contains("emoji"), "and rules out emoji");
+}

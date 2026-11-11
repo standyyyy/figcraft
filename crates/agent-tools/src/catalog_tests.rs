@@ -38,6 +38,8 @@ fn catalog_matches_the_existing_mcp_surface() {
         "upsert_requirements",
         "export_requirements_markdown",
         "render_requirements_markdown",
+        "insert_icon",
+        "list_icons",
         "wait_for_changes",
     ];
     assert_eq!(TOOL_NAMES, expected, "TOOL_NAMES drifted from the MCP surface");

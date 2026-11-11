@@ -1,0 +1,208 @@
+{
+ "name": "TDesign for Web (sample)",
+ "schemaVersion": 0,
+ "lastModified": "2026-11-09T00:00:00Z",
+ "document": {
+  "id": "0:0",
+  "name": "Document",
+  "type": "DOCUMENT",
+  "children": [
+   {
+    "id": "0:1",
+    "name": "Components",
+    "type": "CANVAS",
+    "children": [
+     {
+      "id": "10:1",
+      "name": "Type=Primary, Size=Medium",
+      "type": "COMPONENT",
+      "relativeTransform": [
+       [
+        1,
+        0,
+        100
+       ],
+       [
+        0,
+        1,
+        100
+       ]
+      ],
+      "size": {
+       "x": 80,
+       "y": 32
+      },
+      "cornerRadius": 3,
+      "fills": [
+       {
+        "type": "SOLID",
+        "color": {
+         "r": 0.0,
+         "g": 0.3216,
+         "b": 0.851,
+         "a": 1
+        },
+        "visible": true,
+        "opacity": 1
+       }
+      ],
+      "strokes": [],
+      "strokeWeight": 1,
+      "strokeAlign": "INSIDE",
+      "children": [
+       {
+        "id": "10:2",
+        "name": "Text",
+        "type": "TEXT",
+        "relativeTransform": [
+         [
+          1,
+          0,
+          20
+         ],
+         [
+          0,
+          1,
+          8
+         ]
+        ],
+        "size": {
+         "x": 40,
+         "y": 16
+        },
+        "characters": "按钮",
+        "style": {
+         "fontFamily": "PingFang SC",
+         "fontPostScriptName": "PingFangSC-Medium",
+         "fontWeight": 500,
+         "fontSize": 14,
+         "textAlignHorizontal": "CENTER",
+         "textAlignVertical": "CENTER",
+         "letterSpacing": 0,
+         "lineHeightPx": 22,
+         "lineHeightUnit": "INTRINSIC_%"
+        },
+        "fills": [
+         {
+          "type": "SOLID",
+          "color": {
+           "r": 1,
+           "g": 1,
+           "b": 1,
+           "a": 1
+          },
+          "visible": true,
+          "opacity": 1
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "id": "10:3",
+      "name": "Type=Secondary, Size=Medium",
+      "type": "COMPONENT",
+      "relativeTransform": [
+       [
+        1,
+        0,
+        200
+       ],
+       [
+        0,
+        1,
+        100
+       ]
+      ],
+      "size": {
+       "x": 80,
+       "y": 32
+      },
+      "cornerRadius": 3,
+      "fills": [],
+      "strokes": [
+       {
+        "type": "SOLID",
+        "color": {
+         "r": 0.0,
+         "g": 0.3216,
+         "b": 0.851,
+         "a": 1
+        },
+        "visible": true,
+        "opacity": 1
+       }
+      ],
+      "strokeWeight": 1,
+      "strokeAlign": "INSIDE",
+      "children": [
+       {
+        "id": "10:4",
+        "name": "Text",
+        "type": "TEXT",
+        "relativeTransform": [
+         [
+          1,
+          0,
+          20
+         ],
+         [
+          0,
+          1,
+          8
+         ]
+        ],
+        "size": {
+         "x": 40,
+         "y": 16
+        },
+        "characters": "按钮",
+        "style": {
+         "fontFamily": "PingFang SC",
+         "fontWeight": 500,
+         "fontSize": 14,
+         "textAlignHorizontal": "CENTER",
+         "textAlignVertical": "CENTER",
+         "lineHeightPx": 22
+        },
+        "fills": [
+         {
+          "type": "SOLID",
+          "color": {
+           "r": 0.0,
+           "g": 0.3216,
+           "b": 0.851,
+           "a": 1
+          },
+          "visible": true,
+          "opacity": 1
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ "components": {
+  "10:1": {
+   "key": "abc111",
+   "name": "Button",
+   "componentSetId": "20:1"
+  },
+  "10:3": {
+   "key": "abc222",
+   "name": "Button",
+   "componentSetId": "20:1"
+  }
+ },
+ "componentSets": {
+  "20:1": {
+   "key": "set1",
+   "name": "Button",
+   "description": "TDesign 主按钮"
+  }
+ },
+ "styles": {}
+}

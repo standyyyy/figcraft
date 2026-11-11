@@ -46,3 +46,11 @@ egui's default fonts (compiled into the `egui`/`epaint` crates) keep their own l
 | Path | Contributor | Source | Licence | Review |
 |---|---|---|---|---|
 | `crates/ui-egui/locales/ar.toml` | @hussain-hz with OpenAI Codex (AI-assisted) | Original Arabic wording from FigCraft's English catalog and engine command labels; no proprietary localisation consulted | MIT OR Apache-2.0 | Draft; native-speaker review and maintainer approval pending |
+
+## TDesign icons and tokens
+
+| Path | Contributor | Source | Licence | Review |
+|---|---|---|---|---|
+| `examples/tdesign/icons-common.figcraft` | TDesign (Tencent) | Icon paths as published in `tdesign-icons-vue-next` 0.4.12, extracted to a `.figcraft` file; `crates/agent-tools/src/icons.rs` is generated from it | MIT | Paths copied as published, not redrawn; TDesign's MIT licence is on this repository's allowlist |
+| `examples/tdesign/tdesign-kit.figcraft` | TDesign (Tencent) | Text styles and components rebuilt from TDesign's published tokens | MIT | Tokens taken from `tdesign-vue-next` 1.20.11's `dist/tdesign.css`; see `examples/tdesign/TOKENS.md` |
+| `examples/tdesign/TOKENS.md` | — | Extracted CSS custom properties from `tdesign-vue-next` 1.20.11 | MIT | Values copied, not estimated |

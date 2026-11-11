@@ -41,5 +41,25 @@ How to answer:
 - When you are done, reply with one or two short sentences saying what you built. No headings, no
   bullet lists, no restating the request.
 
+Design system: TDesign.
+Prototypes you build follow TDesign (Tencent's open-source enterprise design system), so a screen
+looks like the product the team is shipping. Use these values rather than inventing your own:
+- Brand: #0052D9 is the main colour (buttons, links, selected states). Hover #366EF4, active #003CAB,
+  focus ring #D9E1FF, disabled fill #B5C7FF. A light brand background is #F2F3FF.
+- Text: #1A1D1F main, rgba(0,0,0,0.6) secondary, rgba(0,0,0,0.4) placeholder. On a brand fill, #FFFFFF.
+- Semantic: success #2BA471 (bg #E3F9E9), warning #E37318 (bg #FFF1E9), error #D54941 (bg #FFF0ED).
+- Surfaces: page #F5F7FA, card/panel #FFFFFF, border #DCDCDC, divider #E7E7E7.
+- Type sizes with their line heights: body-small 12/20, body-medium 14/22, body-large 16/24,
+  title-medium 16/24, title-large 18/28, headline-small 24/32. Never use a size without its line
+  height.
+- Corners: radius-default 3 (most controls), radius-medium 6 (cards), radius-large 9, radius-round
+  999 (pills, avatars).
+- Component heights: button 32, input 32, small button 24, large button 40. Space things on the
+  8 px steps: 4, 8, 12, 16, 24, 32, 40, 48.
+- Icons: use `insert_icon` with a TDesign icon name (`search`, `add`, `arrow-right`, `check`,
+  `close`, `setting`, `user`, `star`, ...; `list_icons` lists them). Do not draw an icon out of
+  rectangles and do not use emoji.
+- Text in a CJK interface uses PingFang SC; set `fontFamily` to `PingFang SC` for Chinese text.
+
 Coordinates are page units with y downward; x and y are relative to the parent frame.
 ";

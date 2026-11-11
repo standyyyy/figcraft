@@ -128,6 +128,8 @@ const EMBEDDED_TOOLS: &[&str] = &[
     "get_requirements",
     "upsert_requirements",
     "render_requirements_markdown",
+    "insert_icon",
+    "list_icons",
 ];
 
 /// Namespaces whose every command is document-local and replayable.
@@ -344,6 +346,8 @@ pub const TOOL_NAMES: &[&str] = &[
     "upsert_requirements",
     "export_requirements_markdown",
     "render_requirements_markdown",
+    "insert_icon",
+    "list_icons",
     "wait_for_changes",
 ];
 
@@ -689,6 +693,24 @@ fn tools() -> Vec<Value> {
             true,
         ),
         tool(
+            "insert_icon",
+            "Insert an icon",
+            "Place a TDesign icon on the canvas as a vector layer. Name one of the icons this build carries (list_icons), give a place and a size, and it is scaled from the icon's own box. TDesign is the design system these prototypes follow, so prefer these over emoji or drawn shapes.",
+            obj(
+                json!({
+                    "name": string("The icon's name, e.g. `search`, `add`, `arrow-right` (list_icons lists them all)"),
+                    "x": num("Left edge, in page units"),
+                    "y": num("Top edge, in page units"),
+                    "size": num("Width and height, in page units (default 16: the icon's own size)"),
+                    "parent": int("The frame to put it in (default: the current page)"),
+                    "colour": string("Fill and stroke colour as `#RRGGBB` (default: TDesign's main text colour, #1A1D1F)"),
+                }),
+                &["name", "x", "y"],
+            ),
+            false,
+        ),
+        tool("list_icons", "List icons", "Every TDesign icon this build carries, by name. Use one with `insert_icon`.", obj(json!({}), &[]), true),
+        tool(
             "wait_for_changes",
             "Wait for changes",
             "Wait for new comment events in the attached FigCraft app. Returns pending events immediately; otherwise waits up to `timeoutMs` (default 20000, max 25000). Call it again with the returned `cursor` to keep watching. Headless returns immediately (no other writer). Events carry a sequence number, kind, document and a small payload (for comments, the thread id).",
@@ -905,6 +927,8 @@ pub fn call_tool(b: &mut dyn Backend, policy: ToolPolicy, name: &str, args: &Val
         },
         "export_requirements_markdown" => requirements_export(b, &a),
         "render_requirements_markdown" => requirements_render(b, &a),
+        "insert_icon" => insert_icon(b, &a),
+        "list_icons" => Ok(ToolResult::text(crate::icons::names().collect::<Vec<_>>().join(", "))),
         "wait_for_changes" => wait_for_changes(b, &a),
         other => Err(format!("unknown tool `{other}` (tools/list has: {})", TOOL_NAMES.join(", "))),
     };
@@ -925,6 +949,43 @@ fn requirements_target(b: &mut dyn Backend, a: &Map<String, Value>, command: &st
 /// Reading a document: the structure, with its Markdown alongside (JSON, because both are useful).
 fn requirements_read(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, String> {
     requirements_target(b, a, "requirements.get").map(|v| ToolResult::json(&v))
+}
+
+/// Place a TDesign icon as a vector layer.
+///
+/// The icon carries its own box and its own path; asking for a size scales it. The stroke is set from
+/// the colour asked for, and no fill: TDesign's icons are line drawings, and filling one turns a
+/// magnifier into a blob.
+fn insert_icon(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, String> {
+    let asked = req_s(a, "name")?;
+    let Some((name, path, iw, ih)) = crate::icons::find(asked) else {
+        return Err(format!("`{asked}` is not one of this build's icons ({} are available; list_icons names them)", crate::icons::ICONS.len()));
+    };
+    let (iw, ih) = (f64::from(iw), f64::from(ih));
+    let size = n_arg(a, "size")?.unwrap_or(iw.max(ih)).max(1.0);
+    // The icon keeps its own proportions: a wide arrow given one number stays wide.
+    let scale = size / iw.max(ih);
+    let (w, h) = (iw * scale, ih * scale);
+    let colour = a.get("colour").and_then(Value::as_str).unwrap_or("#1A1D1F");
+    let mut params = json!({
+        "path": path,
+        "x": n_arg(a, "x")?.unwrap_or(0.0),
+        "y": n_arg(a, "y")?.unwrap_or(0.0),
+        "width": w,
+        "height": h,
+        "name": format!("icon/{name}"),
+        // A line drawing: stroked in the colour asked for, never filled.
+        "props": {
+            "fills": [],
+            "strokes": [{"type": "solid", "color": colour}],
+            "strokeWeight": 1.0,
+        },
+    });
+    if let Some(parent) = a.get("parent").filter(|v| !v.is_null()) {
+        params["parent"] = parent.clone();
+    }
+    let r = exec(b, "vector.create", params)?;
+    Ok(ToolResult::json(&json!({"id": r.get("id"), "icon": name, "width": w, "height": h})))
 }
 
 /// Rendering: the Markdown text, never a file.

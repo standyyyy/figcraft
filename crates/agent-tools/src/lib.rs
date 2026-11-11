@@ -9,6 +9,7 @@
 
 pub mod backend;
 pub mod catalog;
+pub mod icons;
 
 #[cfg(test)]
 #[path = "catalog_tests.rs"]

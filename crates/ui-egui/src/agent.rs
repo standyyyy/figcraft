@@ -76,6 +76,12 @@ pub struct AgentPanel {
     /// the alternative is losing the work and asking again. The panel offers it as a button; nothing
     /// applies it without a click.
     pub recoverable: Option<figcraft_agent::CommitEnvelope>,
+    /// The requirements document a turn just wrote, so the panel can point at it.
+    ///
+    /// A model that writes a PRD answers "已写好了", and the document is in a tab the person is not
+    /// looking at -- which reads as "it did not work". Naming it and offering to open it is the
+    /// difference between a feature and a mystery.
+    pub wrote_requirements: Option<String>,
     /// The requirements document open in the Requirements tab (`None`: the list).
     pub editing: Option<String>,
     /// The Requirements tab's draft fields while a document is open.
@@ -209,6 +215,7 @@ impl AgentPanel {
             error: None,
             last_undo_label: None,
             recoverable: None,
+            wrote_requirements: None,
             editing: None,
             requirements_draft: None,
             export_note: None,
@@ -229,6 +236,7 @@ impl AgentPanel {
     pub fn begin_turn(&mut self, turn: u64, request: &str) {
         self.current = Some(AgentRun::new(turn, request));
         self.status = RunStatus::Streaming;
+        self.wrote_requirements = None;
         self.tools.clear();
         self.notices.clear();
         self.reasoning.clear();
@@ -439,6 +447,8 @@ pub enum Request {
     ExportRequirements { id: String },
     /// Leave the requirements editor.
     CloseRequirements,
+    /// Show the Requirements tab.
+    ShowRequirements,
     /// Apply a replay whose commit was refused because the document had moved on.
     ///
     /// A person's decision, never automatic: the document changed, so what the Agent built may be out
@@ -712,8 +722,10 @@ fn draw_chat(ui: &mut Ui, state: &mut AgentPanel, input: &PanelInput, t: &Tokens
     // to fixed geometry meant a long conversation simply ran off the bottom with no way to reach it.
     let mut area = ui.new_child(egui::UiBuilder::new().max_rect(transcript).layout(Layout::top_down(Align::Min)));
     egui::ScrollArea::vertical().auto_shrink([false, false]).stick_to_bottom(true).show(&mut area, |ui| {
-        ui.add_space(10.0);
-        ui.spacing_mut().item_spacing.y = 6.0;
+        ui.add_space(14.0);
+        // Room to breathe between turns: 6 packed a long conversation into a wall of text, which is
+        // most of why the panel read as cramped.
+        ui.spacing_mut().item_spacing.y = 10.0;
 
         // The summary compaction wrote, so an elided history is visible rather than surprising.
         if let Some(summary) = &input.chat.summary {
@@ -784,6 +796,18 @@ fn draw_chat(ui: &mut Ui, state: &mut AgentPanel, input: &PanelInput, t: &Tokens
         for note in &state.notices {
             ui.label(egui::RichText::new(note).size(9.5).color(t.text_tertiary));
         }
+        // A turn that wrote a requirements document says so and offers to show it: the answer reads
+        // "写好了" otherwise, and the document is in a tab the person is not looking at.
+        if let Some(written) = &state.wrote_requirements {
+            egui::Frame::NONE.fill(t.field).corner_radius(CornerRadius::same(6)).inner_margin(egui::Margin::symmetric(9, 7)).show(ui, |ui| {
+                ui.label(egui::RichText::new(crate::i18n::tr("Wrote a requirements document")).size(10.0).color(t.text));
+                ui.label(egui::RichText::new(written.as_str()).size(9.5).color(t.text_secondary));
+                ui.add_space(2.0);
+                if ui.add(egui::Button::new(crate::i18n::tr("Open Requirements")).min_size(vec2(120.0, 22.0))).clicked() {
+                    out.push(Request::ShowRequirements);
+                }
+            });
+        }
         if let Some(error) = &state.error {
             egui::Frame::NONE.fill(t.field).corner_radius(CornerRadius::same(6)).inner_margin(egui::Margin::symmetric(9, 7)).show(ui, |ui| {
                 ui.label(egui::RichText::new(error).size(10.0).color(t.text));
@@ -828,15 +852,15 @@ fn bubble(ui: &mut Ui, t: &Tokens, title: &str, text: &str, kind: Kind) {
         Kind::Note => (t.field, None, Align::Min, t.text_tertiary, CornerRadius::same(6)),
     };
     let width = ui.available_width();
-    let max = if kind == Kind::Mine { width * 0.82 } else { width };
+    let max = if kind == Kind::Mine { width * 0.78 } else { width - 8.0 };
     ui.with_layout(Layout::top_down(align), |ui| {
         ui.set_max_width(max);
-        let mut frame = egui::Frame::NONE.fill(fill).corner_radius(corner).inner_margin(egui::Margin::symmetric(9, 7));
+        let mut frame = egui::Frame::NONE.fill(fill).corner_radius(corner).inner_margin(egui::Margin::symmetric(11, 9));
         if let Some(stroke) = stroke {
             frame = frame.stroke(Stroke::new(1.0, stroke));
         }
         frame.show(ui, |ui| {
-            ui.set_max_width(max - 18.0);
+            ui.set_max_width(max - 22.0);
             if !title.is_empty() && title != text {
                 ui.label(egui::RichText::new(title).size(11.0).color(text_colour));
             }
@@ -919,7 +943,8 @@ fn tools(ui: &mut Ui, t: &Tokens, rows: &[ToolCall], running: bool) {
         return;
     }
     ui.with_layout(Layout::top_down(Align::Min), |ui| {
-        ui.spacing_mut().item_spacing.y = 2.0;
+        ui.spacing_mut().item_spacing.y = 1.0;
+        ui.spacing_mut().item_spacing.x = 5.0;
         for (i, row) in rows.iter().enumerate() {
             let is_last = i + 1 == rows.len();
             let mark = if !row.ok {
@@ -1387,8 +1412,28 @@ pub fn apply_connection_result(app: &mut crate::FigApp, request: u64, status: fi
 }
 
 /// Settle the turn a terminal belongs to: apply its envelope, then record and persist the outcome.
+/// The requirements document a replay created or replaced, if it touched one.
+///
+/// `requirements.upsert` returns the saved document, and the tool's result carries it; when the replay
+/// holds the command, the id is in its parameters (`id`) or is allocated by the command. Naming the
+/// document is enough to point at it: the panel opens the list, which shows it.
+fn requirements_written(terminal: &figcraft_agent::TurnTerminal) -> Option<String> {
+    let figcraft_agent::TurnTerminal::Success { commit: Some(c), .. } = terminal else { return None };
+    c.replay.iter().find(|s| s.command == "requirements.upsert").map(|s| {
+        s.params
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .map_or_else(|| s.params.get("title").and_then(serde_json::Value::as_str).unwrap_or("PRD").to_string(), str::to_string)
+    })
+}
+
 fn settle_turn(app: &mut crate::FigApp, terminal: &figcraft_agent::TurnTerminal) {
     app.ui.agent_running.finish();
+    if let Some(written) = requirements_written(terminal)
+        && let Some(panel) = app.ui.agent.as_mut()
+    {
+        panel.wrote_requirements = Some(written);
+    }
     // What actually happened to the document, which is the fact the transcript records.
     let disposition = apply_terminal(app, terminal);
     // Copied out first: recording needs the session (for the conversation id) and the transcript,
@@ -1676,6 +1721,12 @@ pub fn perform_requests(app: &mut crate::FigApp) {
                 let request = app.ui.agent.as_ref().and_then(|p| p.current.as_ref()).map(|r| r.request.clone());
                 if let Some(request) = request {
                     start_turn(app, &request);
+                }
+            }
+            Request::ShowRequirements => {
+                if let Some(panel) = app.ui.agent.as_mut() {
+                    panel.tab = AgentTab::Requirements;
+                    panel.show_reasoning = false;
                 }
             }
             Request::ApplyRefused => apply_refused(app),

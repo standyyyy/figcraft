@@ -1168,38 +1168,43 @@ fn draw_requirements_editor(
     // The scroll area is given an explicit height. A `new_child` Ui does not report the room its rect
     // offers, so a `ScrollArea` inside one got an unbounded available height and never scrolled: the
     // form simply drew past the bottom of the panel. `max_height` is the height the form actually has.
-    let mut area = ui.new_child(egui::UiBuilder::new().max_rect(form).layout(Layout::top_down(Align::Min)));
-    let ui = &mut area;
+    // `allocate_new_ui` gives the child a real interaction context, which a bare `new_child` does
+    // not: without it the `ScrollArea` never saw the pointer over itself, so the wheel did nothing.
     let form_height = (form.height() - 4.0).max(32.0);
-    egui::ScrollArea::vertical().max_height(form_height).auto_shrink([false, false]).id_salt("requirements-editor").show(ui, |ui| {
-        // A frame is what insets on all four sides: `add_space` before the content only moved it down,
-        // so the labels still sat against the panel's left border.
-        egui::Frame::NONE.inner_margin(egui::Margin { left: 14, right: 14, top: 12, bottom: 10 }).show(ui, |ui| {
-            ui.spacing_mut().item_spacing.y = 9.0;
-            let width = (ui.available_width() - 6.0).max(80.0);
+    // `scope_builder` allocates the space it uses back into the parent, so the child has a real rect
+    // and interaction context. A bare `new_child` does neither, and a `ScrollArea` inside one never
+    // saw the pointer over itself -- which is why the wheel did nothing at all.
+    ui.scope_builder(egui::UiBuilder::new().max_rect(form), |ui| {
+        egui::ScrollArea::vertical().max_height(form_height).auto_shrink([false, false]).id_salt("requirements-editor").show(ui, |ui| {
+            // A frame is what insets on all four sides: `add_space` before the content only moved it down,
+            // so the labels still sat against the panel's left border.
+            egui::Frame::NONE.inner_margin(egui::Margin { left: 14, right: 14, top: 12, bottom: 10 }).show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 9.0;
+                let width = (ui.available_width() - 6.0).max(80.0);
 
-            /// A labelled multi-line field: a label, then the box, both in the flow.
-            fn field(ui: &mut Ui, t: &Tokens, label: &str, value: &mut String, rows: usize, width: f32) {
-                ui.label(egui::RichText::new(label).size(9.5).color(t.text_tertiary));
-                ui.add(
-                    egui::TextEdit::multiline(value)
-                        .desired_width(width)
-                        .desired_rows(rows)
-                        .frame(egui::Frame::NONE.fill(t.field).corner_radius(CornerRadius::same(4)).inner_margin(egui::Margin::symmetric(6, 5))),
-                );
-            }
+                /// A labelled multi-line field: a label, then the box, both in the flow.
+                fn field(ui: &mut Ui, t: &Tokens, label: &str, value: &mut String, rows: usize, width: f32) {
+                    ui.label(egui::RichText::new(label).size(9.5).color(t.text_tertiary));
+                    ui.add(
+                        egui::TextEdit::multiline(value)
+                            .desired_width(width)
+                            .desired_rows(rows)
+                            .frame(egui::Frame::NONE.fill(t.field).corner_radius(CornerRadius::same(4)).inner_margin(egui::Margin::symmetric(6, 5))),
+                    );
+                }
 
-            field(ui, t, crate::i18n::tr("Title"), &mut draft.title, 1, width);
-            field(ui, t, crate::i18n::tr("Summary"), &mut draft.summary, 2, width);
-            field(ui, t, crate::i18n::tr("Goals (one per line)"), &mut draft.goals, 3, width);
-            field(ui, t, crate::i18n::tr("Non-goals"), &mut draft.non_goals, 2, width);
-            field(ui, t, crate::i18n::tr("Audiences"), &mut draft.audiences, 2, width);
-            field(ui, t, crate::i18n::tr("Requirements (title, priority, detail)"), &mut draft.requirements, 6, width);
-            field(ui, t, crate::i18n::tr("Acceptance criteria"), &mut draft.acceptance_criteria, 3, width);
-            field(ui, t, crate::i18n::tr("Open questions"), &mut draft.open_questions, 2, width);
-            if let Some(note) = &state.export_note {
-                ui.label(egui::RichText::new(note.as_str()).size(9.0).color(t.text_tertiary));
-            }
+                field(ui, t, crate::i18n::tr("Title"), &mut draft.title, 1, width);
+                field(ui, t, crate::i18n::tr("Summary"), &mut draft.summary, 2, width);
+                field(ui, t, crate::i18n::tr("Goals (one per line)"), &mut draft.goals, 3, width);
+                field(ui, t, crate::i18n::tr("Non-goals"), &mut draft.non_goals, 2, width);
+                field(ui, t, crate::i18n::tr("Audiences"), &mut draft.audiences, 2, width);
+                field(ui, t, crate::i18n::tr("Requirements (title, priority, detail)"), &mut draft.requirements, 6, width);
+                field(ui, t, crate::i18n::tr("Acceptance criteria"), &mut draft.acceptance_criteria, 3, width);
+                field(ui, t, crate::i18n::tr("Open questions"), &mut draft.open_questions, 2, width);
+                if let Some(note) = &state.export_note {
+                    ui.label(egui::RichText::new(note.as_str()).size(9.0).color(t.text_tertiary));
+                }
+            });
         });
     });
 

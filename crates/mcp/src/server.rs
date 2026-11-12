@@ -7,7 +7,7 @@ use figcraft_engine::file_access::{Roots, confined};
 
 use serde_json::{Value, json};
 
-use crate::backend::Backend;
+use crate::Backend;
 use crate::prompts;
 use crate::resources;
 use crate::tools::{call_tool, tool_definitions};

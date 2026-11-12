@@ -6,6 +6,20 @@ use serde_json::{Value, json};
 use crate::Session;
 use crate::inspect::{InspectOptions, document, document_with_options, node_json, node_json_with_options};
 
+/// Whether two JSON values hold the same data, ignoring object key order.
+///
+/// `serde_json::Value`'s own `==` compares maps entry by entry, so it is order-*sensitive* when
+/// `preserve_order` turns maps into `IndexMap`s. Object order in inspect output is a separate
+/// contract (see `inspection_output_key_order_comes_from_the_inspect_contract_not_the_feature_graph`);
+/// this comparison is about the values, so it sorts keys on the way down.
+fn same_json(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Object(x), Value::Object(y)) => x.len() == y.len() && x.iter().all(|(k, xv)| y.get(k).is_some_and(|yv| same_json(xv, yv))),
+        (Value::Array(x), Value::Array(y)) => x.len() == y.len() && x.iter().zip(y).all(|(xv, yv)| same_json(xv, yv)),
+        _ => a == b,
+    }
+}
+
 fn run(s: &mut Session, command: &str, params: Value) -> Value {
     s.execute(command, &params).unwrap_or_else(|e| panic!("{command}: {e}"))
 }
@@ -295,12 +309,22 @@ fn empty_options_keep_the_main_tree_and_document_output() {
         "variables": 0
     });
     let expected_node = &expected["pages"][0]["children"][0];
-    assert_eq!(node_json(s.doc().unwrap(), frame, 4).to_string(), expected_node.to_string());
-    assert_eq!(document(&s, 4, true).to_string(), expected.to_string());
+    // Values are compared, not key order. The order is a separate contract, asserted by
+    // `inspection_output_key_order_comes_from_the_inspect_contract_not_the_feature_graph`: it belongs
+    // to `inspect`'s explicit field sequence, and `DocumentProjection` plus the code-ordered property
+    // insertion define it. Comparing text here as well would make this golden test fail whenever a
+    // dependency enables `serde_json/preserve_order` (Rig does), which says nothing about the values
+    // being right.
+    let actual_node = node_json(s.doc().unwrap(), frame, 4);
+    assert!(same_json(&actual_node, expected_node), "the node's values:\n actual: {actual_node}\n expected: {expected_node}");
+    let actual_doc = document(&s, 4, true);
+    assert!(same_json(&actual_doc, &expected), "the document's values differ");
     for params in [json!({}), json!({"outline": false})] {
         let options = InspectOptions::parse(&params).unwrap();
-        assert_eq!(node_json_with_options(s.doc().unwrap(), frame, 4, &options).to_string(), expected_node.to_string());
-        assert_eq!(document_with_options(&s, 4, true, &options).to_string(), expected.to_string());
+        let actual = node_json_with_options(s.doc().unwrap(), frame, 4, &options);
+        assert!(same_json(&actual, expected_node), "the node's values under {params}");
+        let actual_doc = document_with_options(&s, 4, true, &options);
+        assert!(same_json(&actual_doc, &expected), "the document's values under {params}");
     }
 }
 

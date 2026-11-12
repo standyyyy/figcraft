@@ -33,6 +33,22 @@ figcraft-mcp = { path = "crates/mcp" }
 figcraft-collab-net = { path = "crates/collab-net" }
 figcraft-plugin = { path = "crates/plugin" }
 
+# The embedded Agent and the tool catalog both surfaces share. Rig is pinned exactly: 0.44.0 is
+# the last release that supports the workspace MSRV (1.95); 0.46 requires Rust 1.97.1. Only the
+# narrow `rig-core` reqwest transport is taken, never the `rig` facade, so the dependency graph
+# stays small and no second TLS backend joins the build.
+figcraft-agent-tools = { path = "crates/agent-tools" }
+figcraft-agent = { path = "crates/agent" }
+rig-agent = { version = "=0.44.0", default-features = true }
+rig-core = { version = "=0.44.0", default-features = false, features = ["reqwest"] }
+# The blocking HTTP client the model transport uses. FigCraft already ships it (craft-font-store
+# downloads fonts with it), so the Agent adds no new HTTP stack: one client, one TLS story.
+# Polling Rig's agent stream from a blocking thread (the stream is a futures 0.3 Stream).
+futures = { version = "0.3", default-features = false, features = ["std", "executor"] }
+# A portable delay for the turn deadline: it uses the browser timer on WASM and a thread on native,
+# so one absolute deadline bounds the wait on both platforms.
+futures-timer = "=3.0.3"
+
 # Keep coupled craft-libs crates on one rev. craft-update has no sibling-crate
 # dependencies and is pinned separately for the suite updater rollout.
 # Which paths stored in a document may be followed (craft-libs).
@@ -62,7 +78,13 @@ thiserror = "2"
 # Command-line parsing for figcraft-cli (craft-contrib RFC-0012: clap derive, as photocraft does).
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive", "rc"] }
-serde_json = { version = "1", features = ["float_roundtrip"] }
+# `preserve_order` is declared here, not left to a dependency, because Rig enables it
+# unconditionally: without this line a build of one crate keeps `BTreeMap` and sorts object keys,
+# while a workspace build (which pulls rig-core in) keeps insertion order. The inspect output is a
+# public contract -- MCP clients, the Agent and the control channel read it -- so it must not depend
+# on which crates happen to be in the graph. Declaring it makes every build use `IndexMap` and lets
+# `inspect` define its own field order (see `crates/engine/src/automation/inspect.rs`).
+serde_json = { version = "1", features = ["float_roundtrip", "preserve_order"] }
 regex = "1.13"
 log = "0.4"
 same-file = "1.0.6"

@@ -10,6 +10,8 @@ workspace = true
 
 [dependencies]
 figcraft-engine = { workspace = true }
+# The canvas tool catalog both MCP and the in-app Agent consume.
+figcraft-agent-tools = { workspace = true }
 figcraft-collab-net = { workspace = true }
 figcraft-doc = { workspace = true }
 figcraft-geom = { workspace = true }

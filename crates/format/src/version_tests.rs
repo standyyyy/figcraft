@@ -150,3 +150,85 @@ fn saving_refuses_bad_version_ids() {
     assert_eq!(v.name.chars().count(), MAX_VERSION_NAME);
     assert_eq!(v.description.chars().count(), MAX_VERSION_DESCRIPTION);
 }
+
+// ---------- requirements documents ----------
+
+#[test]
+fn a_file_with_requirements_round_trips() {
+    use figcraft_doc::{Priority, Requirement, RequirementsDocument};
+    let mut d = Document::new("prd");
+    let mut prd = RequirementsDocument::new("PRD:1", "Checkout redesign");
+    prd.summary = "Fewer steps on a phone.".into();
+    prd.goals.push("One screen".into());
+    prd.requirements.push(Requirement {
+        id: "r-1".into(),
+        title: "Remember the address".into(),
+        detail: "Prefill from the last order.".into(),
+        priority: Priority::Must,
+        acceptance_criteria: vec!["It appears on return.".into()],
+        ..Default::default()
+    });
+    d.requirements.push(prd);
+
+    let bytes = save_bytes(&d, None).unwrap();
+    let (back, _) = load_bytes(&bytes).unwrap();
+    assert_eq!(back.requirements, d.requirements, "requirements survive save and reopen");
+}
+
+#[test]
+fn a_file_without_requirements_stays_readable_and_writes_no_field() {
+    // The point of `skip_serializing_if`: an old file is unchanged, and a new one without
+    // requirements carries no new key, so older readers ignore it.
+    let mut d = Document::new("plain");
+    let page = d.first_page().unwrap();
+    d.create(page, NodeKind::Rectangle, "R", 0.0, 0.0, 10.0, 10.0).unwrap();
+
+    let bytes = save_bytes(&d, None).unwrap();
+    let (back, _) = load_bytes(&bytes).unwrap();
+    assert!(back.requirements.is_empty());
+
+    // Read document.json out of the archive and confirm the key is absent.
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut json = String::new();
+    std::io::Read::read_to_string(&mut z.by_name("document.json").unwrap(), &mut json).unwrap();
+    assert!(!json.contains("\"requirements\""), "a file without requirements writes no field: {json}");
+}
+
+#[test]
+fn an_old_document_json_without_the_field_still_opens() {
+    // A `document.json` written before this field existed must open as a document with no
+    // requirements.
+    let d = Document::new("old");
+    let bytes = save_bytes(&d, None).unwrap();
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut json: serde_json::Value = {
+        let mut s = String::new();
+        std::io::Read::read_to_string(&mut z.by_name("document.json").unwrap(), &mut s).unwrap();
+        serde_json::from_str(&s).unwrap()
+    };
+    json.as_object_mut().unwrap().remove("requirements");
+    assert!(json.get("requirements").is_none());
+    let json = serde_json::to_vec(&json).unwrap();
+    let bytes = zip_of(&[("document.json", &json)]);
+    let (back, _) = load_bytes(&bytes).unwrap();
+    assert!(back.requirements.is_empty(), "a document.json without the field opens with none");
+    assert_eq!(back.name, "old");
+}
+
+#[test]
+fn a_version_preserves_its_requirements() {
+    use figcraft_doc::RequirementsDocument;
+    let mut d = Document::new("prd");
+    d.requirements.push(RequirementsDocument::new("PRD:1", "In the file"));
+    let doc = Arc::new(d);
+    let mut earlier = (*doc).clone();
+    earlier.requirements.push(RequirementsDocument::new("PRD:2", "Only in the version"));
+    let v = Version::new("a", "Earlier", "", 0, Arc::new(earlier));
+
+    let bytes = save_bytes_with_versions(&doc, None, &[v]).unwrap();
+    let loaded = load_bytes_with_versions(&bytes).unwrap();
+    assert_eq!(loaded.doc.requirements.len(), 1, "the file holds one document");
+    let version = loaded.versions[0].document().expect("version document");
+    assert_eq!(version.requirements.len(), 2, "the version keeps its own requirements");
+    assert_eq!(version.requirements[1].title, "Only in the version");
+}

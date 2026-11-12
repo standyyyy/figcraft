@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use base64::Engine as _;
-use figcraft_doc::{Collection, Comment, DevSnapshot, Document, ImageData, Style, Variable};
+use figcraft_doc::{Collection, Comment, DevSnapshot, Document, ImageData, RequirementsDocument, Style, Variable};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -47,6 +47,13 @@ impl Keyed for Variable {
     }
 }
 
+impl Keyed for RequirementsDocument {
+    type Key = String;
+    fn key(&self) -> String {
+        self.id.clone()
+    }
+}
+
 /// How one keyed list of the document syncs.
 struct List<T: Keyed> {
     whole: DocProp,
@@ -67,6 +74,7 @@ pub(crate) struct Index {
     comments: Option<KeyIndex<u64>>,
     collections: Option<KeyIndex<String>>,
     variables: Option<KeyIndex<String>>,
+    requirements: Option<KeyIndex<String>>,
 }
 
 /// The position of the first entry with each key in one list, and the list's length when it was
@@ -119,6 +127,14 @@ const COLLECTIONS: List<Collection> = List {
     get: |d| &d.variables.collections,
     get_mut: |d| &mut d.variables.collections,
     index: |i| &mut i.collections,
+};
+const REQUIREMENTS: List<RequirementsDocument> = List {
+    whole: DocProp::Requirements,
+    order: DocProp::RequirementsOrder,
+    entry: Entry::Requirements,
+    get: |d| &d.requirements,
+    get_mut: |d| &mut d.requirements,
+    index: |i| &mut i.requirements,
 };
 const VARIABLES: List<Variable> = List {
     whole: DocProp::Variables,
@@ -382,6 +398,7 @@ pub(crate) fn diff(a: &Document, b: &Document, out: &mut Vec<Change>) -> Result<
     diff_scalars(a, b, out)?;
     STYLES.diff(a, b, out)?;
     COMMENTS.diff(a, b, out)?;
+    REQUIREMENTS.diff(a, b, out)?;
     COLLECTIONS.diff(a, b, out)?;
     VARIABLES.diff(a, b, out)?;
     diff_map(&a.dev_snapshots, &b.dev_snapshots, |x, y| Arc::ptr_eq(x, y) || x == y, |k| Entry::DevSnapshot(*k), Json::of, out)?;
@@ -416,6 +433,8 @@ pub(crate) fn apply_indexed(doc: &mut Document, change: &Change, index: &mut Ind
                 DocProp::StyleOrder => STYLES.reorder(doc, value, index),
                 DocProp::Comments => COMMENTS.set_whole(doc, value, index),
                 DocProp::CommentOrder => COMMENTS.reorder(doc, value, index),
+                DocProp::Requirements => REQUIREMENTS.set_whole(doc, value, index),
+                DocProp::RequirementsOrder => REQUIREMENTS.reorder(doc, value, index),
                 DocProp::Collections => COLLECTIONS.set_whole(doc, value, index),
                 DocProp::CollectionOrder => COLLECTIONS.reorder(doc, value, index),
                 DocProp::Variables => VARIABLES.set_whole(doc, value, index),
@@ -426,6 +445,7 @@ pub(crate) fn apply_indexed(doc: &mut Document, change: &Change, index: &mut Ind
         Change::Put { entry, value } => match entry {
             Entry::Style(k) => STYLES.put(doc, k.clone(), value, index)?,
             Entry::Comment(k) => COMMENTS.put(doc, *k, value, index)?,
+            Entry::Requirements(k) => REQUIREMENTS.put(doc, k.clone(), value, index)?,
             Entry::Collection(k) => COLLECTIONS.put(doc, k.clone(), value, index)?,
             Entry::Variable(k) => VARIABLES.put(doc, k.clone(), value, index)?,
             Entry::DevSnapshot(k) => {
@@ -443,6 +463,7 @@ pub(crate) fn apply_indexed(doc: &mut Document, change: &Change, index: &mut Ind
         Change::Remove { entry } => match entry {
             Entry::Style(k) => STYLES.remove(doc, k, index),
             Entry::Comment(k) => COMMENTS.remove(doc, k, index),
+            Entry::Requirements(k) => REQUIREMENTS.remove(doc, k, index),
             Entry::Collection(k) => COLLECTIONS.remove(doc, k, index),
             Entry::Variable(k) => VARIABLES.remove(doc, k, index),
             Entry::DevSnapshot(k) => {
@@ -482,6 +503,8 @@ pub(crate) fn get(doc: &Document, prop: DocProp) -> Result<Json, Error> {
         DocProp::StyleOrder => order(&doc.styles),
         DocProp::Comments => Json::of(&doc.comments),
         DocProp::CommentOrder => order(&doc.comments),
+        DocProp::Requirements => Json::of(&doc.requirements),
+        DocProp::RequirementsOrder => order(&doc.requirements),
         DocProp::Collections => Json::of(&doc.variables.collections),
         DocProp::CollectionOrder => order(&doc.variables.collections),
         DocProp::Variables => Json::of(&doc.variables.variables),
@@ -495,6 +518,7 @@ pub(crate) fn entry_value(doc: &Document, entry: &Entry) -> Result<Option<Json>,
     let value = match entry {
         Entry::Style(k) => doc.styles.iter().find(|s| s.id == *k).map(Json::of),
         Entry::Comment(k) => doc.comments.iter().find(|c| c.id == *k).map(Json::of),
+        Entry::Requirements(k) => doc.requirements.iter().find(|r| r.id == *k).map(Json::of),
         Entry::Collection(k) => doc.variables.collections.iter().find(|c| c.id == *k).map(Json::of),
         Entry::Variable(k) => doc.variables.variables.iter().find(|v| v.id == *k).map(Json::of),
         Entry::DevSnapshot(k) => doc.dev_snapshots.get(k).map(|s| Json::of(s.as_ref())),
@@ -509,6 +533,7 @@ pub(crate) fn has(doc: &Document, entry: &Entry) -> bool {
     match entry {
         Entry::Style(k) => doc.styles.iter().any(|s| s.id == *k),
         Entry::Comment(k) => doc.comments.iter().any(|c| c.id == *k),
+        Entry::Requirements(k) => doc.requirements.iter().any(|r| r.id == *k),
         Entry::Collection(k) => doc.variables.collections.iter().any(|c| c.id == *k),
         Entry::Variable(k) => doc.variables.variables.iter().any(|v| v.id == *k),
         Entry::DevSnapshot(k) => doc.dev_snapshots.contains_key(k),
@@ -525,6 +550,7 @@ pub(crate) fn entries(doc: &Document, family: Family) -> Vec<Entry> {
     match family {
         Family::Styles => keys(&STYLES, doc),
         Family::Comments => keys(&COMMENTS, doc),
+        Family::Requirements => keys(&REQUIREMENTS, doc),
         Family::Collections => keys(&COLLECTIONS, doc),
         Family::Variables => keys(&VARIABLES, doc),
     }
@@ -543,6 +569,7 @@ pub(crate) fn current(doc: &Document, change: &Change) -> Result<Option<Change>,
                     Family::Comments => DocProp::Comments,
                     Family::Collections => DocProp::Collections,
                     Family::Variables => DocProp::Variables,
+                    Family::Requirements => DocProp::Requirements,
                 },
             };
             Ok(Some(Change::SetDoc { prop, value: get(doc, prop)? }))

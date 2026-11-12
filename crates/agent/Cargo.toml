@@ -1,0 +1,35 @@
+[package]
+name = "figcraft-agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "FigCraft embedded Agent: Rig runtime, shadow session, and one-undo commits"
+
+[lints]
+workspace = true
+
+[dependencies]
+figcraft-agent-tools = { workspace = true }
+figcraft-engine = { workspace = true }
+figcraft-doc = { workspace = true }
+figcraft-format = { workspace = true }
+rig-agent = { workspace = true }
+rig-core = { workspace = true }
+# Driving Rig's streaming stream from a blocking worker thread. Already in the graph through
+# Rig; declared here because the code polls it directly.
+futures = { workspace = true }
+futures-timer = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }
+# Rig's transport, pinned directly.
+#
+# `rig-reqwest` and `reqwest` are pinned to the exact versions Rig 0.44 selects, so an unrelated
+# `cargo update` cannot move the HTTP stack under the Agent, and both stay `default-features = false`:
+# enabling a feature here would turn on native TLS beside the rustls Rig already uses, which is a
+# second TLS backend in one binary. The browser uses the same client through fetch.
+rig-reqwest = { version = "=0.44.0", default-features = false }
+reqwest = { version = "=0.13.5", default-features = false }
+
+# Native only: the platform's file dialogs and sockets.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]

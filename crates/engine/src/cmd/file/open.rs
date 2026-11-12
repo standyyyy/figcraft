@@ -100,6 +100,7 @@ pub(crate) fn open(s: &mut Session, p: &Value) -> Result<Value> {
     let summary = import_summary(&loaded.doc);
     let images_left_out = if native { loaded.images_past_budget } else { 0 };
     let mut ds = DocState::new(loaded.doc, native.then(|| path.clone()))
+        .with_agent(loaded.agent.clone().unwrap_or_default())
         .with_versions(loaded.versions)
         .with_branches(loaded.branches)
         .with_images_left_in_file(&path, images_left_out);
@@ -121,6 +122,7 @@ pub(super) fn revert(s: &mut Session) -> Result<()> {
     let uid = s.ds()?.uid;
     if let Some(slot) = s.docs.get_mut(i) {
         *slot = DocState::new(loaded.doc, Some(path.clone()))
+            .with_agent(loaded.agent.clone().unwrap_or_default())
             .with_versions(loaded.versions)
             .with_branches(loaded.branches)
             .with_images_left_in_file(&path, loaded.images_past_budget);
@@ -140,7 +142,12 @@ fn open_data(s: &mut Session, data: &str, p: &Value, variables: Option<&Value>) 
     let (loaded, rest) = load_with(&bytes, &name, variables, &figcraft_format::rest::no_images)?;
     let warnings = rest || matches!(ext(&name).as_str(), "svg" | "penpot");
     let summary = import_summary(&loaded.doc);
-    s.docs.push(DocState::new(loaded.doc, None).with_versions(loaded.versions).with_branches(loaded.branches));
+    s.docs.push(
+        DocState::new(loaded.doc, None)
+            .with_agent(loaded.agent.clone().unwrap_or_default())
+            .with_versions(loaded.versions)
+            .with_branches(loaded.branches),
+    );
     s.active = s.docs.len() - 1;
     let mut out = json!({"index": s.active, "summary": summary});
     out[if warnings { "warnings" } else { "repairs" }] = json!(loaded.issues);

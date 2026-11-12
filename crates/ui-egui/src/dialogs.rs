@@ -276,6 +276,131 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
                     t.text_secondary,
                 );
             }
+            // The in-app Agent's provider. The key is never entered here: preferences are saved as
+            // text, so this asks for the *name* of the variable that holds it on the desktop, and a
+            // browser asks for the key in the panel where it can stay in memory.
+            ui.add_space(10.0);
+            ui.separator();
+            ui.add_space(6.0);
+            crate::widgets::label(ui, tr("Agent"), t.text);
+            let agent = prefs.agent.clone();
+            if crate::widgets::checkbox(ui, agent.enabled, tr("Enable the in-app Agent")) {
+                app.run("pref.agent", json!({"enabled": !agent.enabled}));
+            }
+            let mut provider = json!({});
+            ui.horizontal(|ui| {
+                ui.label(tr("Provider URL"));
+                if let Some(url) =
+                    crate::widgets::text_field_named(ui, egui::Id::unique("pref_agent_url"), &agent.base_url, 220.0, tr("Provider URL"))
+                {
+                    provider["baseUrl"] = json!(url);
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label(tr("Model"));
+                if let Some(model) = crate::widgets::text_field_named(ui, egui::Id::unique("pref_agent_model"), &agent.model, 220.0, tr("Model")) {
+                    provider["model"] = json!(model);
+                }
+            });
+            if !cfg!(target_arch = "wasm32") {
+                let reference = agent.credential.clone().unwrap_or_default();
+                ui.horizontal(|ui| {
+                    ui.label(tr("Key variable"));
+                    if let Some(name) = crate::widgets::text_field_named(
+                        ui,
+                        egui::Id::unique("pref_agent_credential"),
+                        &reference,
+                        220.0,
+                        tr("The environment variable that holds the key"),
+                    ) {
+                        provider["credential"] = json!(name);
+                    }
+                });
+                crate::widgets::label(ui, tr("The name of the variable holding the key, not the key."), t.text_secondary);
+            }
+            // A browser has no environment to read, so the key is typed here and kept in memory only.
+            // The value never reaches `pref.agent`: preferences are saved as text, so a key in them
+            // would be a key on disk. Only the reserved reference is persisted.
+            if cfg!(target_arch = "wasm32") {
+                let held = app.ui.agent_credentials.draft().unwrap_or_default();
+                ui.horizontal(|ui| {
+                    ui.label(tr("API key for this browser session"));
+                    if let Some(typed) = crate::widgets::secret_field_named(
+                        ui,
+                        egui::Id::unique("pref_agent_key"),
+                        &held,
+                        220.0,
+                        tr("API key for this browser session"),
+                    ) {
+                        app.ui.agent_credentials.set_draft(typed);
+                    }
+                    if crate::widgets::button(ui, tr("Use this key"), false, !held.trim().is_empty()).clicked() {
+                        app.ui.agent_credentials.commit_draft();
+                    }
+                    if crate::widgets::button(ui, tr("Forget"), false, app.ui.agent_credentials.is_set()).clicked() {
+                        app.ui.agent_credentials.clear_session_key();
+                    }
+                });
+                // The reference follows the store, so the config names the session key only when one
+                // is actually held.
+                let wanted = if app.ui.agent_credentials.is_set() { Some(figcraft_agent::SESSION_REFERENCE.to_string()) } else { None };
+                if wanted != agent.credential {
+                    provider["credential"] = match &wanted {
+                        Some(r) => json!(r),
+                        None => json!(""),
+                    };
+                }
+                crate::widgets::label(
+                    ui,
+                    tr("Held for this session only: a reload keeps the endpoint and model and asks for the key again."),
+                    t.text_secondary,
+                );
+            }
+            if !provider.as_object().is_some_and(|o| o.is_empty()) {
+                app.run("pref.agent", provider);
+            }
+            // Test the endpoint without running a turn: no shadow, no tools, no document change.
+            //
+            // The test runs on the host, not here: awaiting a provider inside the draw freezes the
+            // window for as long as the provider is silent, which is exactly when a person is most
+            // likely to be pressing this button. The result arrives on a later frame, through the same
+            // queue as everything else.
+            if agent.enabled {
+                let testing = app.ui.agent_connection.is_testing();
+                ui.horizontal(|ui| {
+                    let label = crate::i18n::tr("Test connection");
+                    // Disabled while testing, so a second click cannot start a second request.
+                    let enabled = !testing && !agent.base_url.trim().is_empty();
+                    if crate::widgets::button(ui, label, false, enabled).clicked()
+                        && let Ok(config) = figcraft_agent::AgentConfig::from_prefs(&agent)
+                        && let Some(host) = app.ui.agent_host.as_mut()
+                    {
+                        app.ui.agent_connection_request = app.ui.agent_connection_request.wrapping_add(1);
+                        let request = app.ui.agent_connection_request;
+                        app.ui.agent_connection = crate::agent::AgentConnectionState::Testing;
+                        let token = host.start_connection_test(request, config);
+                        app.ui.agent_connection_cancel = Some(token);
+                    }
+                    if let Some(note) = app.ui.agent_connection.message() {
+                        ui.label(note);
+                    }
+                });
+            }
+            // What the settings amount to, so a mistake is visible here rather than at the first turn.
+            match figcraft_agent::AgentConfig::from_prefs(&agent) {
+                Ok(_) if agent.enabled && !agent.base_url.trim().is_empty() => {
+                    crate::widgets::label(ui, tr("The Agent is ready."), t.text_secondary);
+                }
+                Ok(_) if !agent.enabled => {
+                    crate::widgets::label(ui, tr("The Agent is off."), t.text_secondary);
+                }
+                Ok(_) => {
+                    crate::widgets::label(ui, tr("Enter the provider URL and model to use the Agent."), t.text_secondary);
+                }
+                Err(e) => {
+                    crate::widgets::label(ui, &e.to_string(), t.text_secondary);
+                }
+            }
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 ui.label(tr("Your name"));
@@ -399,6 +524,8 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
     batch_rename_dialog(app, ctx);
     menu_input_dialog(app, ctx);
     crate::variables_panel::show(app, ctx);
+    crate::agent::show(app, ctx);
+    crate::agent::requirements_window(app, ctx);
     crate::dev_compare::show(app, ctx);
     crate::branch_ui::show(app, ctx);
     if app.ui.export_preview {
@@ -411,6 +538,13 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
     crate::online::dialogs(app, ctx);
     crate::windows::confirm_close(app, ctx);
     crate::windows::confirm_close_tab(app, ctx);
+    // The Agent panel's requests are performed after every draw, so a model call or a save dialog
+    // never happens inside one.
+    // Keep the panel's conversation tied to the open file, before requests or the worker run.
+    crate::agent::sync_transcript_from_document(app);
+    crate::agent::perform_requests(app);
+    // The worker's events, drained after the draw so a frame never waits on it.
+    crate::agent::poll_host(app);
 }
 
 /// Preferences ▸ Interface size: a size relative to the system's display scale (100 % is the

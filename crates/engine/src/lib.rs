@@ -103,7 +103,7 @@ use serde_json::{Value, json};
 mod derived;
 mod doc_state;
 mod error;
-mod prefs;
+pub mod prefs;
 mod session;
 mod view_state;
 
@@ -174,6 +174,8 @@ impl Default for Session {
 mod a11y_keys_tests;
 #[cfg(test)]
 mod agent_presence_tests;
+#[cfg(test)]
+mod agent_transcript_tests;
 #[cfg(test)]
 mod al_behaviour_tests;
 #[cfg(test)]
@@ -490,6 +492,8 @@ mod plugin_directory_tests;
 mod plugin_panels_tests;
 #[cfg(test)]
 pub(crate) mod plugins_tests;
+#[cfg(test)]
+mod prefs_tests;
 #[cfg(test)]
 mod progressive_blur_tests;
 #[cfg(test)]

@@ -101,7 +101,19 @@ impl FigApp {
             "lastError": self.ui.last_error,
             "importReport": self.ui.import_report.as_ref().map(import_report::Report::inspect),
         });
+        // The Agent panel's stable summary: status and counts, never the transcript or a
+        // credential (see `AgentPanel::summary`). Added outside the `json!` literal so the macro
+        // does not nest one level deeper.
+        state["agent"] = self.ui.agent.as_ref().map(|p| p.summary()).unwrap_or(Value::Null);
         state["homeSearch"] = json!(self.ui.home_view.file_query);
+        // Temporary: what the commit gate compares, so a conflict can be read from one inspection.
+        state["agentDiag"] = json!({
+            "activeTurn": self.ui.agent_turn,
+            "panelTurn": self.ui.agent.as_ref().and_then(|p| p.current.as_ref()).map(|r| r.turn),
+            "uid": self.session.ds().ok().map(|d| d.uid),
+            "revision": self.session.ds().ok().map(|d| d.revision),
+            "error": self.ui.agent.as_ref().and_then(|p| p.error.clone()),
+        });
         state["panels"]["minimized"] = json!(self.session.ds().is_ok_and(|d| d.view.ui_minimized));
         // Set apart from the literal above, which is at the macro recursion limit.
         state["uiScale"] = json!({"choice": self.session.prefs.ui_scale, "zoom": self.ui.ui_scale.zoom, "drawn": self.ui.ui_scale.drawn, "limited": self.ui.ui_scale.limited});

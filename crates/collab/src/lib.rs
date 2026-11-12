@@ -162,6 +162,8 @@ mod reconnect_tests;
 #[cfg(test)]
 mod rename_tests;
 #[cfg(test)]
+mod requirements_tests;
+#[cfg(test)]
 mod server_tests;
 #[cfg(test)]
 mod signal_tests;

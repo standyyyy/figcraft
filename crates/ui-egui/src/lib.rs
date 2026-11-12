@@ -4,6 +4,8 @@
 //! commands; the canvas forwards pointer events to the engine's tools and draws overlays. Nothing
 //! below this crate knows about egui, so the frontend can be replaced.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+// Tests may unwrap: a failed expectation there is the point, not a crash in shipped code.
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 /// FigCraft as craft-update knows it, with its 128 px icon and accent colour: the update
 /// prompt shows both, and an AppImage's menu entry gets the icon.
@@ -15,6 +17,17 @@ pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
 };
 
 pub mod a11y;
+pub mod agent;
+pub mod agent_credentials;
+pub mod agent_driver;
+pub mod agent_host;
+/// The browser Agent host: one local future per turn, driven by the page's event loop.
+#[cfg(target_arch = "wasm32")]
+pub mod agent_local;
+/// The desktop Agent worker: one named thread per turn. Native only; the browser drives the same
+/// `AgentHost` interface with a local future instead.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod agent_worker;
 pub mod bidi;
 pub mod canvas;
 pub mod cjk;
@@ -49,6 +62,17 @@ mod theme_startup_tests;
 
 #[cfg(test)]
 mod a11y_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod agent_host_tests;
+
+#[cfg(test)]
+mod agent_driver_tests;
+#[cfg(test)]
+mod agent_export_tests;
+#[cfg(test)]
+mod agent_layout_tests;
+#[cfg(test)]
+mod agent_tests;
 #[cfg(test)]
 mod async_dialog_tests;
 #[cfg(test)]
@@ -447,6 +471,35 @@ pub struct UiState {
     pub actions_rect: Option<egui::Rect>,
     /// The Variables editor, when open.
     pub variables: Option<variables_panel::Editor>,
+    /// The in-app Agent panel, open when this is set. Display state only: the runtime handle lives
+    /// in the app's host, and `ui.inspect` reports `AgentPanel::summary`.
+    pub agent: Option<agent::AgentPanel>,
+    /// The running turn's cancellation token, kept out of the serializable surface.
+    pub agent_running: agent::Running,
+    /// The provider settings, read once per frame so a change in Preferences is picked up.
+    pub agent_configured: bool,
+    /// The Agent's transcript for this file, read from the file and written back on save.
+    pub agent_transcript: figcraft_agent::history::Transcript,
+    /// The file `agent_transcript` was read from, so a tab switch reloads it and a frame does not.
+    pub agent_transcript_uid: Option<u64>,
+    /// The browser's session key store.
+    ///
+    /// Present on every platform so the panel has one shape; only the browser writes to it, because
+    /// only the browser has no environment to read. It is never serialized.
+    pub agent_credentials: agent_credentials::AgentCredentials,
+    /// What the last connection test is doing; survives frames because the result arrives later.
+    pub agent_connection: agent::AgentConnectionState,
+    /// The id of the newest connection test, so an older result is discarded.
+    pub agent_connection_request: u64,
+    /// The token that stops a running connection test.
+    pub agent_connection_cancel: Option<figcraft_agent::run::CancelToken>,
+    /// Requests the Agent panel produced this frame, for the app to perform after the draw.
+    pub agent_requests: Vec<agent::Request>,
+    /// The platform's way to run a turn. `None` until the app sets one, so a build without a runtime
+    /// keeps working and the panel says so.
+    pub agent_host: Option<Box<dyn agent_host::AgentHost>>,
+    /// The turn the panel is showing; the host's events carry it.
+    pub agent_turn: u64,
     pub about: bool,
     /// The tab the About window shows.
     pub about_tab: dialogs::AboutTab,
@@ -657,6 +710,18 @@ impl Default for UiState {
             context_menu_shown: false,
             actions_rect: None,
             variables: None,
+            agent: None,
+            agent_running: agent::Running::default(),
+            agent_configured: false,
+            agent_transcript: figcraft_agent::history::Transcript::default(),
+            agent_transcript_uid: None,
+            agent_credentials: agent_credentials::AgentCredentials::default(),
+            agent_connection: agent::AgentConnectionState::default(),
+            agent_connection_request: 0,
+            agent_connection_cancel: None,
+            agent_requests: Vec::new(),
+            agent_host: None,
+            agent_turn: 0,
             about: false,
             about_tab: dialogs::AboutTab::About,
             preferences: false,

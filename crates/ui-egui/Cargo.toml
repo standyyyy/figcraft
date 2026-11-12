@@ -19,6 +19,9 @@ figcraft-render = { workspace = true }
 figcraft-pathops = { workspace = true }
 figcraft-engine = { workspace = true }
 figcraft-format = { workspace = true }
+# The embedded Agent runtime the chat/requirements panel drives.
+figcraft-agent = { workspace = true }
+figcraft-agent-tools = { workspace = true }
 egui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -41,3 +44,7 @@ egui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 craft-update = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# The browser Agent host advances its turn on the page's event loop.
+wasm-bindgen-futures = "0.4"

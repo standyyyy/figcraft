@@ -7,7 +7,8 @@ use std::time::Duration;
 
 use serde_json::json;
 
-use super::{Attached, Backend};
+use super::Attached;
+use figcraft_agent_tools::Backend;
 
 /// A fake app that takes one connection per reply, reads one request on it and answers with the
 /// reply. It keeps the connections open until [`finish`] (so an unterminated reply never reaches

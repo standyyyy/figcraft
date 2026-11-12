@@ -32,7 +32,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 | 16 | Dev Mode: renaming the file in Dev Mode to check; the editor extension is left to the MCP server (publishing mappings from the code repository landed 2026-10-30) | Feature | 1–2 | [dev-mode-parity](dev-mode-parity.md) |
 | 17 | Branching: text runs merged whole, branches only their author sees in a live session (branches in live sessions, export settings and guides item by item, and history entries for creation and updates landed 2026-10-24) | Feature | 1–2 | [collaboration-parity](collaboration-parity.md) |
 | 18 | Display P3 on screen: blocked upstream (egui-wgpu picks an 8-bit sRGB surface); gamut warning and soft-proof sRGB landed, as did several windows | Hardware | 4–8 | [hardware-parity](hardware-parity.md) |
-| 19 | AI features | AI | 30–60 | [target-app-parity](target-app-parity.md) |
+| 19 | AI features | AI | 24–48 | [target-app-parity](target-app-parity.md) |
 | 20 | Mobile apps (view, mirror, comment) | Platforms | 20–40 | [hardware-parity](hardware-parity.md) |
 | 21 | Menu items without a command: none left (landed 2026-10-11) | Feature | — | [parity-checklist](parity-checklist.md) |
 | 22 | Screen readers never run; browser has no accessibility tree | UI/UX | 4–8 | [ui-parity](ui-parity.md) |
@@ -543,9 +543,26 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
   `figcraft://comments`), a bounded in-memory event log, `events.poll` and `wait_for_changes` for
   live feedback. Any MCP client can drive a headless file or an attached app; no in-app model and no
   network dependency.
-- **Missing:** Figma AI (first draft, rename layers, remove background, image generation and
-  editing, visual search, Make).
-- **Estimate:** 30–60 h with openly licensed local models. **Owner decision needed.**
+- **Landed (2026-11-10, in-app Agent foundation):** a chat panel that drives a local
+  OpenAI-compatible model with the same canvas tools MCP exposes. The catalog is shared
+  (`figcraft-agent-tools`, 23 tools; 15 document-local ones for the Agent), so a tool behaves the
+  same on either surface. A turn runs against a shadow copy of the document and commits its recorded
+  commands as exactly one `command.batch` undo step — or changes nothing at all when the turn is
+  cancelled, fails, or finds the live revision moved on (offering a rerun instead of replaying stale
+  commands). Structured requirements documents are ordinary file data: six commands, four MCP tools,
+  save/open, undo, live sync, branches, versions, and Markdown export with escaping. Conversations
+  travel as a capped archive member and compact before a model's context, keeping the newest complete
+  turns and an explicit summary.
+- **Measured, not claimed:** against the workspace's vLLM service the Agent streams delta by delta
+  (six in one measured answer), calls a canvas tool whose replay commits as one undo entry, continues
+  a follow-up from the previous turn's history, commits nothing on cancellation or a stale revision,
+  writes a structured PRD through document-local commands, and passes its connection check. The same
+  runtime runs in the browser: desktop drives it on a worker thread, the browser on a local future,
+  and both resolve credentials through one contract.
+- **Missing:** Figma AI's generation features (first draft, rename layers, remove background, image
+  generation and editing, visual search, Make).
+- **Estimate:** 26–52 h remaining with openly licensed local models, for the generation features
+  beyond the chat-and-tools foundation. **Owner decision needed.**
 
 ### 20. Mobile apps
 - **Missing:** Figma's iOS and Android apps view and comment on files and mirror prototypes.
@@ -617,6 +634,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 | 2026-10-29 | minor | Gap 7: the browser draws a zoom's full render a band at a time (eight at most), so a deep zoom no longer holds the page for the whole render; pans and edits meanwhile are patched in once it is drawn. Numbers unchanged |
 | 2026-10-28 | minor | Arabic draft: 1,857 UI strings, 620 command labels, 31 menu wordings; count-neutral plurals and web font gate. Native review and panel mirroring remain open; grade and estimates unchanged. Evidence: `locales/ar.toml`, i18n catalog tests and [translation notes](translating.md#arabic-draft) |
 | 2026-10-28 | minor | Gap 7: the browser refines a zoom's preview only once the zoom has paused for 120 ms, so a wheel zoom no longer runs a blocking full render between every two steps. Numbers unchanged |
+| 2026-11-10 | major | M13 foundation: an in-app Agent panel over a shared canvas-tool catalog, one-turn-one-undo through a shadow session with a revision guard, structured requirements documents as file data, capped and compacted transcripts, Rig's streaming loop on desktop and in the browser (a worker thread and a local future over one runtime), a typed terminal only a success can carry a replay in, and one ordered host queue that wakes the UI. Gap 19 moves from not-started to foundation-landed, estimate 30–60 h → 24–48 h for the generation features beyond chat-and-tools |
 | 2026-10-27 | minor | M12: the MCP agent feedback workflow landed (comments as tasks, `comment.prompt`, Copy for AI, `fix_comments` / `watch_comments`, `figcraft://comments`, a bounded event log, `events.poll` and `wait_for_changes`). Figma AI features and local models are still not started, so gap 19's missing list and estimate stand |
 | 2026-10-27 | minor | M6, #1397: damaged generated FigJam shape geometry falls back to usable outer fill or stroke outlines before a rectangle; a surviving sticky author no longer suppresses the outer body-text fallback. Synthetic regressions cover both outlines, missing/invalid/blank bodies, author retention and layer budgets. Numbers unchanged. |
 | 2026-10-26 | minor | M6, #1397: generated FigJam backgrounds read saved vector networks before rectangle fallback; missing or invalid generated text uses the outer text without discarding successful children or exceeding the layer budget. Regression tests cover both paths. Numbers unchanged. |

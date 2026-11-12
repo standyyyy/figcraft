@@ -24,6 +24,8 @@ pub const STYLE_ID_PREFIX: &str = "S:";
 pub const VARIABLE_ID_PREFIX: &str = "VariableID:";
 /// What variable collection ids start with.
 pub const COLLECTION_ID_PREFIX: &str = "VariableCollectionId:";
+/// What requirements document ids start with.
+pub const REQUIREMENTS_ID_PREFIX: &str = "PRD:";
 /// What separates a mode id's collection from its number.
 pub const MODE_ID_INFIX: &str = "/mode";
 
@@ -113,6 +115,15 @@ impl Document {
     pub fn new_collection_id_avoiding(&mut self, avoid: &BTreeSet<CollectionId>) -> CollectionId {
         let taken = self.variables.collections.iter().map(|c| &c.id).chain(avoid).filter_map(|id| id_number(id, COLLECTION_ID_PREFIX)).collect();
         self.new_numbered_id(COLLECTION_ID_PREFIX, taken)
+    }
+
+    /// A new requirements document id.
+    ///
+    /// Deterministic like the others: numbers continue from the documents this file already holds,
+    /// so a replay of the same commands produces the same ids.
+    pub fn new_requirements_id(&mut self) -> String {
+        let taken: Vec<u64> = self.requirements.iter().filter_map(|r| id_number(&r.id, REQUIREMENTS_ID_PREFIX)).collect();
+        self.new_numbered_id(REQUIREMENTS_ID_PREFIX, taken)
     }
 
     /// `<prefix><n>`: from this client's space in a session, else one above the highest of `taken`.

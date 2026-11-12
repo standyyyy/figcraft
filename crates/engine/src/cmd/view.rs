@@ -344,6 +344,13 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         spec!("view.layers", "Layers panel", "{}", false, |s, _| ui(s, "panel.layers")),
         spec!("view.assets", "Assets panel", "{}", false, |s, _| ui(s, "panel.assets")),
+        spec!(
+            "view.requirements",
+            "Requirements",
+            "{} (the requirements documents this file carries: open the Agent panel on its Requirements tab)",
+            false,
+            |s, _| ui(s, "panel.requirements")
+        ),
         spec!("view.design", "Design panel", "{}", false, |s, _| ui(s, "panel.design")),
         spec!("view.prototype", "Prototype panel", "{}", false, |s, _| ui(s, "panel.prototype")),
         spec!("view.designPrototype", "Switch between Design and Prototype", "{}", false, |s, _| ui(s, "panel.designPrototype")),
@@ -444,6 +451,34 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         spec!("pref.uiScaleReset", "Default interface size", "{}  back to the system's own size (1) → {scale}", false, |s, _| ui_scale_step(s, 0)),
         spec!("pref.autoSave", "Save files automatically", "{on?}", false, |s, p| pref(s, p, |x| &mut x.auto_save)),
+        // The in-app Agent's provider. The credential is stored as the NAME of the variable that
+        // holds it, never the key: a preferences file that gets copied or committed cannot leak it.
+        spec!("pref.agent", "Agent provider", "{enabled?, baseUrl?, model?, credential?, timeoutSeconds?}", false, |s, p| {
+            let a = &mut s.prefs.agent;
+            if let Some(v) = get(p, "enabled").and_then(Value::as_bool) {
+                a.enabled = v;
+            }
+            if let Some(v) = get(p, "baseUrl").and_then(Value::as_str) {
+                a.base_url = v.to_string();
+            }
+            if let Some(v) = get(p, "model").and_then(Value::as_str) {
+                a.model = v.to_string();
+            }
+            if let Some(v) = get(p, "credential") {
+                a.credential = v.as_str().filter(|s| !s.trim().is_empty()).map(str::to_string);
+            }
+            if let Some(v) = get(p, "timeoutSeconds").and_then(Value::as_u64) {
+                a.timeout_seconds = u32::try_from(v).unwrap_or(crate::prefs::DEFAULT_AGENT_TIMEOUT_SECONDS);
+            }
+            // Report the state without the credential: a status is not a place for it.
+            Ok(json!({
+                "enabled": a.enabled,
+                "baseUrl": a.base_url,
+                "model": a.model,
+                "hasCredential": a.credential.is_some(),
+                "timeoutSeconds": a.timeout_seconds,
+            }))
+        }),
         spec!("pref.startOnHome", "Start on the Home screen", "{on?}", false, |s, p| pref(s, p, |x| &mut x.start_on_home)),
         spec!("pref.nudge", "Nudge amount", "{small?, big?}", false, |s, p| {
             s.prefs.nudge_small = num(p, "small").unwrap_or(s.prefs.nudge_small).clamp(0.01, 1000.0);
@@ -508,6 +543,9 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("app.preferences", "Preferences", "{}", false, |s, _| ui(s, "dialog.preferences")),
         spec!("app.actions", "Actions", "{}", false, |s, _| ui(s, "palette.actions")),
         spec!("help.shortcuts", "Keyboard shortcuts", "{}", false, |s, _| ui(s, "panel.shortcuts")),
+        // The in-app Agent: it either opens or closes the panel, so a shortcut and the Actions
+        // palette reach it the same way as the rail icon.
+        spec!("app.agent", "Agent", "{}", false, |s, _| ui(s, "panel.agent")),
         spec!("help.about", "About FigCraft", "{}", false, |s, _| ui(s, "dialog.about")),
         spec!("help.page", "Help page", "{}", false, |s, _| ui(s, "open.help")),
         spec!(

@@ -557,22 +557,53 @@ pub fn document_with_options(s: &Session, depth: usize, all_pages: bool, options
                 if all_pages || *p == ds.page { node_json_with_options(doc, *p, depth, options) } else { node_json_with_options(doc, *p, 0, options) }
             })
             .collect();
-    json!({
-        "id": ds.uid,
-        "name": doc.name,
-        "kind": doc.kind.id(),
-        "path": ds.path,
-        "dirty": ds.is_dirty(),
-        "currentPage": ds.page,
-        "selection": ds.selection,
-        "pages": pages,
-        "styles": doc.styles.iter().map(|st| json!({"id": st.id, "name": st.name, "type": st.kind.type_name()})).collect::<Vec<_>>(),
-        "variables": doc.variables.variables.len(),
-        "images": doc.images.len(),
-        "colorProfile": doc.color_profile.id(),
-        "textEdit": ds.text_edit,
-        "history": {"undo": s.undo_labels(20), "redo": s.undo_depth().1},
-    })
+    // Built in an explicit declaration order rather than through `json!`, so the sequence is part of
+    // the inspect contract and does not depend on how `serde_json`'s map stores keys. Rig enables
+    // `preserve_order` for the workspace (see the workspace `Cargo.toml`), which turns object maps
+    // from sorted to insertion-ordered; a caller that reads this JSON must see one stable shape
+    // whichever crates are in the build graph.
+    let document = DocumentProjection {
+        id: ds.uid,
+        name: doc.name.clone(),
+        kind: doc.kind.id(),
+        path: ds.path.clone(),
+        dirty: ds.is_dirty(),
+        current_page: ds.page,
+        selection: ds.selection.clone(),
+        pages,
+        styles: doc.styles.iter().map(|st| json!({"id": st.id, "name": st.name, "type": st.kind.type_name()})).collect(),
+        variables: doc.variables.variables.len(),
+        images: doc.images.len(),
+        color_profile: doc.color_profile.id(),
+        text_edit: ds.text_edit.clone(),
+        history: json!({"undo": s.undo_labels(20), "redo": s.undo_depth().1}),
+    };
+    serde_json::to_value(document).unwrap_or(Value::Null)
+}
+
+/// The inspect document's top-level fields, in the order the inspect API documents them.
+///
+/// A derived `Serialize` writes a struct's fields in declaration order, which is what makes the
+/// output independent of `serde_json`'s map implementation: with `preserve_order` a map keeps
+/// insertion order and without it sorts, and Rig enables the feature for the whole workspace.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DocumentProjection {
+    id: u64,
+    name: String,
+    kind: &'static str,
+    path: Option<String>,
+    dirty: bool,
+    #[serde(rename = "currentPage")]
+    current_page: figcraft_doc::NodeId,
+    selection: Vec<figcraft_doc::NodeId>,
+    pages: Vec<Value>,
+    styles: Vec<Value>,
+    variables: usize,
+    images: usize,
+    color_profile: &'static str,
+    text_edit: Option<crate::doc_state::TextEdit>,
+    history: Value,
 }
 
 /// snake_case object keys → camelCase (inspect output matches the keys `node.set` accepts).

@@ -1061,6 +1061,13 @@ fn draw(p: &P, icon: Icon) {
             p.line(8.0, 1.5, 8.0, 3.5);
             p.line(12.0, 4.0, 13.5, 2.5);
         }
+        Send => {
+            // An arrow rising from a baseline: a shaft, a head, and a short bar under it, so it reads
+            // as "send upward" at 12 px without a letter.
+            p.line(8.0, 2.5, 8.0, 11.0);
+            p.poly(&[(8.0, 2.5), (4.8, 5.7), (8.0, 4.4), (11.2, 5.7)], true);
+            p.line(4.5, 13.0, 11.5, 13.0);
+        }
         Pause => {
             p.fill_rect(4.0, 3.0, 6.5, 13.0, 0.5);
             p.fill_rect(9.5, 3.0, 12.0, 13.0, 0.5);
@@ -1076,6 +1083,12 @@ fn draw(p: &P, icon: Icon) {
             p.line(3.0, 8.0, 13.0, 8.0);
             p.poly(&[(5.5, 5.5), (3.0, 8.0), (5.5, 10.5)], false);
             p.poly(&[(10.5, 5.5), (13.0, 8.0), (10.5, 10.5)], false);
+        }
+        Agent => {
+            // A four-point spark: one long vertical and one long horizontal arm, with a smaller
+            // diagonal arm, so it reads as "generate" without being any product's mark.
+            p.poly(&[(8.0, 1.5), (9.2, 6.8), (14.5, 8.0), (9.2, 9.2), (8.0, 14.5), (6.8, 9.2), (1.5, 8.0), (6.8, 6.8)], true);
+            p.dot(12.0, 3.0, 0.9);
         }
         Logo => {
             // FigCraft's own mark: the curled tail of the chameleon on the app icon. One bold

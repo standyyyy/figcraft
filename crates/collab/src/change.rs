@@ -213,6 +213,10 @@ pub enum DocProp {
     Comments,
     /// Comment ids in order.
     CommentOrder,
+    /// Every requirements document, in order (fallback).
+    Requirements,
+    /// Requirements document ids in order.
+    RequirementsOrder,
     /// Every variable collection, in order (fallback).
     Collections,
     /// Collection ids in order.
@@ -254,6 +258,9 @@ pub enum Entry {
     Image(String),
     /// A voter's ballot in a board's vote (value: the layer ids voted on).
     Ballot(String),
+    /// A structured requirements document (value:
+    /// [`RequirementsDocument`](figcraft_doc::RequirementsDocument)).
+    Requirements(String),
 }
 
 /// One synced value a change writes: a node property, a document-level property or a
@@ -296,6 +303,7 @@ pub(crate) enum Family {
     Comments,
     Collections,
     Variables,
+    Requirements,
 }
 
 impl DocProp {
@@ -310,6 +318,8 @@ impl DocProp {
             DocProp::CollectionOrder => Err(Family::Collections),
             DocProp::Variables => Ok(Family::Variables),
             DocProp::VariableOrder => Err(Family::Variables),
+            DocProp::Requirements => Ok(Family::Requirements),
+            DocProp::RequirementsOrder => Err(Family::Requirements),
             _ => return None,
         })
     }
@@ -340,6 +350,7 @@ impl Entry {
             Entry::Comment(_) => Some(Family::Comments),
             Entry::Collection(_) => Some(Family::Collections),
             Entry::Variable(_) => Some(Family::Variables),
+            Entry::Requirements(_) => Some(Family::Requirements),
             Entry::DevSnapshot(_) | Entry::Image(_) | Entry::Ballot(_) => None,
         }
     }
@@ -349,12 +360,13 @@ impl Entry {
     /// space 0. `None` for entries keyed by something else (dev snapshots by layer, images by
     /// content).
     pub fn id_space(&self) -> Option<u32> {
-        use figcraft_doc::ids::{COLLECTION_ID_PREFIX, STYLE_ID_PREFIX, VARIABLE_ID_PREFIX, id_space, space_of};
+        use figcraft_doc::ids::{COLLECTION_ID_PREFIX, REQUIREMENTS_ID_PREFIX, STYLE_ID_PREFIX, VARIABLE_ID_PREFIX, id_space, space_of};
         match self {
             Entry::Style(id) => Some(id_space(id, STYLE_ID_PREFIX)),
             Entry::Variable(id) => Some(id_space(id, VARIABLE_ID_PREFIX)),
             Entry::Collection(id) => Some(id_space(id, COLLECTION_ID_PREFIX)),
             Entry::Comment(id) => Some(space_of(*id)),
+            Entry::Requirements(id) => Some(id_space(id, REQUIREMENTS_ID_PREFIX)),
             Entry::DevSnapshot(_) | Entry::Image(_) | Entry::Ballot(_) => None,
         }
     }
@@ -369,6 +381,7 @@ impl Entry {
             Entry::DevSnapshot(id) => format!("ready-for-dev snapshot of {id}"),
             Entry::Image(hash) => format!("image {hash}"),
             Entry::Ballot(voter) => format!("ballot of {voter}"),
+            Entry::Requirements(id) => format!("requirements document {id}"),
         }
     }
 
@@ -379,6 +392,7 @@ impl Entry {
             Entry::Comment(_) => Some(Family::Comments),
             Entry::Collection(_) => Some(Family::Collections),
             Entry::Variable(_) => Some(Family::Variables),
+            Entry::Requirements(_) => Some(Family::Requirements),
             Entry::DevSnapshot(_) | Entry::Image(_) | Entry::Ballot(_) => None,
         }
     }

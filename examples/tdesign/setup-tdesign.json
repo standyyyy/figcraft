@@ -1,0 +1,953 @@
+[
+ {
+  "command": "variable.createCollection",
+  "params": {
+   "name": "TDesign",
+   "modes": [
+    "Light"
+   ]
+  }
+ },
+ {
+  "command": "variable.create",
+  "params": {
+   "collection": "TDesign",
+   "name": "brand-color-1",
+   "type": "color",
+   "value": "#F2F3FF"
+  }
+ },
+ {
+  "command": "variable.create",
+  "params": {
+   "collection": "TDesign",
+   "name": "brand-color-2",
+   "type": "color",
+   "value": "#D9E1FF"
+  }
+ },
+ {
+  "command": "variable.create",
+  "params": {
+   "collection": "TDesign",
+   "name": "brand-color-3",
+   "type": "color",
+   "value": "#B5C7FF"
+  }
+ },
+ {
+  "command": "variable.create",
+  "params": {
+   "collection": "TDesign",
+   "name": "brand-color-4",
+   "type": "color",
+   "value": "#8EABFF"
+  }
+ },
+ {
+  "command": "variable.create",
+  "params": {
+   "collection": "TDesign",
+   "name": "brand-color-5",
+   "type": "color",
+   "value": "#618DFF"
+  }
+ },
+ {
+  "command": "variable.create",
+  "params": {
+   "collection": "TDesign",
+   "name": "brand-color-6",
+   "type": "color",
+   "value": "#366EF4"
+  }
+ },
+ {
+  "command": "variable.create",
+  "params": {
+   "collection": "TDesign",
+   "name": "brand-color-7",
+   "type": "color",
+   "value": "#0052D9"
+  }
+ },
+ {
+  "command": "variable.create",
+  "params": {
+   "collection": "TDesign",
+   "name": "brand-color-8",
+   "type": "color",
+   "value": "#003CAB"
+  }
+ },
+ {
+  "command": "variable.create",
+  "params": {
+   "collection": "TDesign",
+   "name": "brand-color-9",
+   "type": "color",
+   "value": "#002A7C"
+  }
+ },
+ {
+  "command": "variable.create",
+  "params": {
+   "collection": "TDesign",
+   "name": "brand-color-10",
+   "type": "color",
+   "value": "#001A57"
+  }
+ },
+ {
+  "command": "variable.create",
+  "params": {
+   "collection": "TDesign",
+   "name": "success-color-1",
+   "type": "color",
+   "value": "#E3F9E9"
+  }
+ },
+ {
+  "command": "variable.create",
+  "params": {
+   "collection": "TDesign",
+   "name": "success-color-2",
+   "type": "color",
+   "value": "#C6F3D7"
+  }
+ },
+ {
+  "command": "variable.create",
+  "params": {
+   "collection": "TDesign",
+   "name": "success-color-3",
+   "type": "color",
+   "value": "#92DAB2"
+  }
+ },
+ {
+  "command": "variable.create",
+  "params": {
+   "collection": "TDesign",
+   "name": "success-color-4",
+   "type": "color",
+   "value": "#5DC98D"
+  }
+ },
+ {
+  "command": "variable.create",
+  "params": {
+   "collection": "TDesign",
+   "name": "success-color-5",
+   "type": "color",
+   "value": "#2BA471"
+  }
+ },
+ {
+  "command": "variable.create",
+  "params": {
+   "collection": "TDesign",
+   "name": "success-color-6",
+   "type": "color",
+   "value": "#209A66"
+  }
+ },
+ {
+  "command": "variable.create",
+  "params": {
+   "collection": "TDesign",
+   "name": "success-color-7",
+   "type": "color",
+   "value": "#0E7A4D"
+  }
+ },
+ {
+  "command": "variable.create",
+  "params": {
+   "collection": "TDesign",
+   "name": "warning-color-1",
+   "type": "color",
+   "value": "#FFF1E9"
+  }
+ },
+ {
+  "command": "variable.create",
+  "params": {
+   "collection": "TDesign",
+   "name": "warning-color-2",
+   "type": "color",
+   "value": "#FFD9C2"
+  }
+ },
+ {
+  "command": "variable.create",
+  "params": {
+   "collection": "TDesign",
+   "name": "warning-color-3",
+   "type": "color",
+   "value": "#FFB98C"
+  }
+ },
+ {
+  "command": "variable.create",
+  "params": {
+   "collection": "TDesign",
+   "name": "warning-color-4",
+   "type": "color",
+   "value": "#FA8C3E"
+  }
+ },
+ {
+  "command": "variable.create",
+  "params": {
+   "collection": "TDesign",
+   "name": "warning-color-5",
+   "type": "color",
+   "value": "#E37318"
+  }
+ },
+ {
+  "command": "variable.create",
+  "params": {
+   "collection": "TDesign",
+   "name": "warning-color-6",
+   "type": "color",
+   "value": "#BE5A00"
+  }
+ },
+ {
+  "command": "variable.create",
+  "params": {
+   "collection": "TDesign",
+   "name": "warning-color-7",
+   "type": "color",
+   "value": "#9C4400"
+  }
+ },
+ {
+  "command": "variable.create",
+  "params": {
+   "collection": "TDesign",
+   "name": "error-color-1",
+   "type": "color",
+   "value": "#FFF0ED"
+  }
+ },
+ {
+  "command": "variable.create",
+  "params": {
+   "collection": "TDesign",
+   "name": "error-color-2",
+   "type": "color",
+   "value": "#FFD8D2"
+  }
+ },
+ {
+  "command": "variable.create",
+  "params": {
+   "collection": "TDesign",
+   "name": "error-color-3",
+   "type": "color",
+   "value": "#FFB9B0"
+  }
+ },
+ {
+  "command": "variable.create",
+  "params": {
+   "collection": "TDesign",
+   "name": "error-color-4",
+   "type": "color",
+   "value": "#F78B7F"
+  }
+ },
+ {
+  "command": "variable.create",
+  "params": {
+   "collection": "TDesign",
+   "name": "error-color-5",
+   "type": "color",
+   "value": "#D54941"
+  }
+ },
+ {
+  "command": "variable.create",
+  "params": {
+   "collection": "TDesign",
+   "name": "error-color-6",
+   "type": "color",
+   "value": "#B92F28"
+  }
+ },
+ {
+  "command": "variable.create",
+  "params": {
+   "collection": "TDesign",
+   "name": "error-color-7",
+   "type": "color",
+   "value": "#9A1A15"
+  }
+ },
+ {
+  "command": "variable.create",
+  "params": {
+   "collection": "TDesign",
+   "name": "text-color-primary",
+   "type": "color",
+   "value": "#050505"
+  }
+ },
+ {
+  "command": "variable.create",
+  "params": {
+   "collection": "TDesign",
+   "name": "text-color-secondary",
+   "type": "color",
+   "value": "#3D3D3D"
+  }
+ },
+ {
+  "command": "variable.create",
+  "params": {
+   "collection": "TDesign",
+   "name": "text-color-placeholder",
+   "type": "color",
+   "value": "#8A8A8A"
+  }
+ },
+ {
+  "command": "variable.create",
+  "params": {
+   "collection": "TDesign",
+   "name": "text-color-disabled",
+   "type": "color",
+   "value": "#B3B3B3"
+  }
+ },
+ {
+  "command": "variable.create",
+  "params": {
+   "collection": "TDesign",
+   "name": "text-color-anti",
+   "type": "color",
+   "value": "#FFFFFF"
+  }
+ },
+ {
+  "command": "variable.create",
+  "params": {
+   "collection": "TDesign",
+   "name": "text-color-brand",
+   "type": "color",
+   "value": "#0052D9"
+  }
+ },
+ {
+  "command": "node.create",
+  "params": {
+   "type": "frame",
+   "x": 40,
+   "y": 60,
+   "width": 600,
+   "height": 72,
+   "name": "样本 TD/Body S",
+   "props": {
+    "fill": "none"
+   }
+  }
+ },
+ {
+  "command": "node.create",
+  "params": {
+   "type": "text",
+   "parent": {
+    "$step": 38
+   },
+   "x": 0,
+   "y": 0,
+   "text": "中文排版 TD/Body S 示例",
+   "props": {
+    "fontFamily": "Hiragino Sans GB",
+    "fontSize": 12,
+    "fontStyle": "Regular",
+    "lineHeight": 20,
+    "fill": "#050505"
+   }
+  }
+ },
+ {
+  "command": "style.create",
+  "params": {
+   "type": "text",
+   "name": "TD/Body S",
+   "from": {
+    "$step": 39
+   }
+  }
+ },
+ {
+  "command": "node.create",
+  "params": {
+   "type": "frame",
+   "x": 40,
+   "y": 152,
+   "width": 600,
+   "height": 74,
+   "name": "样本 TD/Body M",
+   "props": {
+    "fill": "none"
+   }
+  }
+ },
+ {
+  "command": "node.create",
+  "params": {
+   "type": "text",
+   "parent": {
+    "$step": 41
+   },
+   "x": 0,
+   "y": 0,
+   "text": "中文排版 TD/Body M 示例",
+   "props": {
+    "fontFamily": "Hiragino Sans GB",
+    "fontSize": 14,
+    "fontStyle": "Regular",
+    "lineHeight": 22,
+    "fill": "#050505"
+   }
+  }
+ },
+ {
+  "command": "style.create",
+  "params": {
+   "type": "text",
+   "name": "TD/Body M",
+   "from": {
+    "$step": 42
+   }
+  }
+ },
+ {
+  "command": "node.create",
+  "params": {
+   "type": "frame",
+   "x": 40,
+   "y": 246,
+   "width": 600,
+   "height": 76,
+   "name": "样本 TD/Body L",
+   "props": {
+    "fill": "none"
+   }
+  }
+ },
+ {
+  "command": "node.create",
+  "params": {
+   "type": "text",
+   "parent": {
+    "$step": 44
+   },
+   "x": 0,
+   "y": 0,
+   "text": "中文排版 TD/Body L 示例",
+   "props": {
+    "fontFamily": "Hiragino Sans GB",
+    "fontSize": 16,
+    "fontStyle": "Regular",
+    "lineHeight": 24,
+    "fill": "#050505"
+   }
+  }
+ },
+ {
+  "command": "style.create",
+  "params": {
+   "type": "text",
+   "name": "TD/Body L",
+   "from": {
+    "$step": 45
+   }
+  }
+ },
+ {
+  "command": "node.create",
+  "params": {
+   "type": "frame",
+   "x": 40,
+   "y": 342,
+   "width": 600,
+   "height": 74,
+   "name": "样本 TD/Title S",
+   "props": {
+    "fill": "none"
+   }
+  }
+ },
+ {
+  "command": "node.create",
+  "params": {
+   "type": "text",
+   "parent": {
+    "$step": 47
+   },
+   "x": 0,
+   "y": 0,
+   "text": "中文排版 TD/Title S 示例",
+   "props": {
+    "fontFamily": "Hiragino Sans GB",
+    "fontSize": 14,
+    "fontStyle": "SemiBold",
+    "lineHeight": 22,
+    "fill": "#050505"
+   }
+  }
+ },
+ {
+  "command": "style.create",
+  "params": {
+   "type": "text",
+   "name": "TD/Title S",
+   "from": {
+    "$step": 48
+   }
+  }
+ },
+ {
+  "command": "node.create",
+  "params": {
+   "type": "frame",
+   "x": 40,
+   "y": 436,
+   "width": 600,
+   "height": 76,
+   "name": "样本 TD/Title M",
+   "props": {
+    "fill": "none"
+   }
+  }
+ },
+ {
+  "command": "node.create",
+  "params": {
+   "type": "text",
+   "parent": {
+    "$step": 50
+   },
+   "x": 0,
+   "y": 0,
+   "text": "中文排版 TD/Title M 示例",
+   "props": {
+    "fontFamily": "Hiragino Sans GB",
+    "fontSize": 16,
+    "fontStyle": "SemiBold",
+    "lineHeight": 24,
+    "fill": "#050505"
+   }
+  }
+ },
+ {
+  "command": "style.create",
+  "params": {
+   "type": "text",
+   "name": "TD/Title M",
+   "from": {
+    "$step": 51
+   }
+  }
+ },
+ {
+  "command": "node.create",
+  "params": {
+   "type": "frame",
+   "x": 40,
+   "y": 532,
+   "width": 600,
+   "height": 78,
+   "name": "样本 TD/Title L",
+   "props": {
+    "fill": "none"
+   }
+  }
+ },
+ {
+  "command": "node.create",
+  "params": {
+   "type": "text",
+   "parent": {
+    "$step": 53
+   },
+   "x": 0,
+   "y": 0,
+   "text": "中文排版 TD/Title L 示例",
+   "props": {
+    "fontFamily": "Hiragino Sans GB",
+    "fontSize": 18,
+    "fontStyle": "SemiBold",
+    "lineHeight": 28,
+    "fill": "#050505"
+   }
+  }
+ },
+ {
+  "command": "style.create",
+  "params": {
+   "type": "text",
+   "name": "TD/Title L",
+   "from": {
+    "$step": 54
+   }
+  }
+ },
+ {
+  "command": "node.create",
+  "params": {
+   "type": "frame",
+   "x": 40,
+   "y": 630,
+   "width": 600,
+   "height": 84,
+   "name": "样本 TD/Headline S",
+   "props": {
+    "fill": "none"
+   }
+  }
+ },
+ {
+  "command": "node.create",
+  "params": {
+   "type": "text",
+   "parent": {
+    "$step": 56
+   },
+   "x": 0,
+   "y": 0,
+   "text": "中文排版 TD/Headline S 示例",
+   "props": {
+    "fontFamily": "Hiragino Sans GB",
+    "fontSize": 24,
+    "fontStyle": "Bold",
+    "lineHeight": 32,
+    "fill": "#050505"
+   }
+  }
+ },
+ {
+  "command": "style.create",
+  "params": {
+   "type": "text",
+   "name": "TD/Headline S",
+   "from": {
+    "$step": 57
+   }
+  }
+ },
+ {
+  "command": "node.create",
+  "params": {
+   "type": "frame",
+   "x": 40,
+   "y": 734,
+   "width": 600,
+   "height": 96,
+   "name": "样本 TD/Display",
+   "props": {
+    "fill": "none"
+   }
+  }
+ },
+ {
+  "command": "node.create",
+  "params": {
+   "type": "text",
+   "parent": {
+    "$step": 59
+   },
+   "x": 0,
+   "y": 0,
+   "text": "中文排版 TD/Display 示例",
+   "props": {
+    "fontFamily": "Hiragino Sans GB",
+    "fontSize": 36,
+    "fontStyle": "Bold",
+    "lineHeight": 48,
+    "fill": "#050505"
+   }
+  }
+ },
+ {
+  "command": "style.create",
+  "params": {
+   "type": "text",
+   "name": "TD/Display",
+   "from": {
+    "$step": 60
+   }
+  }
+ },
+ {
+  "command": "node.create",
+  "params": {
+   "type": "frame",
+   "x": 700,
+   "y": 890,
+   "name": "Button/Primary",
+   "props": {
+    "height": 32,
+    "cornerRadius": 3,
+    "fill": "#0052D9",
+    "layout": {
+     "mode": "horizontal"
+    },
+    "mainAlign": "center",
+    "crossAlign": "center",
+    "padding": [
+     0,
+     15,
+     0,
+     15
+    ],
+    "sizingH": "hug"
+   }
+  }
+ },
+ {
+  "command": "node.create",
+  "params": {
+   "type": "text",
+   "parent": {
+    "$step": 62
+   },
+   "text": "按钮",
+   "props": {
+    "fontFamily": "Hiragino Sans GB",
+    "fontSize": 14,
+    "fontStyle": "SemiBold",
+    "fill": "#FFFFFF"
+   }
+  }
+ },
+ {
+  "command": "style.apply",
+  "params": {
+   "ids": [
+    {
+     "$step": 63
+    }
+   ],
+   "style": "TD/Title S"
+  }
+ },
+ {
+  "command": "component.create",
+  "params": {
+   "ids": [
+    {
+     "$step": 62
+    }
+   ]
+  }
+ },
+ {
+  "command": "node.create",
+  "params": {
+   "type": "frame",
+   "x": 700,
+   "y": 946,
+   "name": "Button/Outline",
+   "props": {
+    "height": 32,
+    "cornerRadius": 3,
+    "fill": "none",
+    "layout": {
+     "mode": "horizontal"
+    },
+    "mainAlign": "center",
+    "crossAlign": "center",
+    "padding": [
+     0,
+     15,
+     0,
+     15
+    ],
+    "sizingH": "hug",
+    "stroke": "#0052D9",
+    "strokeWeight": 1
+   }
+  }
+ },
+ {
+  "command": "node.create",
+  "params": {
+   "type": "text",
+   "parent": {
+    "$step": 66
+   },
+   "text": "按钮",
+   "props": {
+    "fontFamily": "Hiragino Sans GB",
+    "fontSize": 14,
+    "fontStyle": "Regular",
+    "fill": "#0052D9"
+   }
+  }
+ },
+ {
+  "command": "style.apply",
+  "params": {
+   "ids": [
+    {
+     "$step": 67
+    }
+   ],
+   "style": "TD/Body M"
+  }
+ },
+ {
+  "command": "component.create",
+  "params": {
+   "ids": [
+    {
+     "$step": 66
+    }
+   ]
+  }
+ },
+ {
+  "command": "node.create",
+  "params": {
+   "type": "frame",
+   "x": 700,
+   "y": 1002,
+   "name": "Button/Text",
+   "props": {
+    "height": 32,
+    "cornerRadius": 3,
+    "fill": "none",
+    "layout": {
+     "mode": "horizontal"
+    },
+    "mainAlign": "center",
+    "crossAlign": "center",
+    "padding": [
+     0,
+     15,
+     0,
+     15
+    ],
+    "sizingH": "hug"
+   }
+  }
+ },
+ {
+  "command": "node.create",
+  "params": {
+   "type": "text",
+   "parent": {
+    "$step": 70
+   },
+   "text": "按钮",
+   "props": {
+    "fontFamily": "Hiragino Sans GB",
+    "fontSize": 14,
+    "fontStyle": "Regular",
+    "fill": "#0052D9"
+   }
+  }
+ },
+ {
+  "command": "style.apply",
+  "params": {
+   "ids": [
+    {
+     "$step": 71
+    }
+   ],
+   "style": "TD/Body M"
+  }
+ },
+ {
+  "command": "component.create",
+  "params": {
+   "ids": [
+    {
+     "$step": 70
+    }
+   ]
+  }
+ },
+ {
+  "command": "node.create",
+  "params": {
+   "type": "frame",
+   "x": 700,
+   "y": 1098,
+   "width": 240,
+   "height": 32,
+   "name": "Input/Default",
+   "props": {
+    "fill": "#FFFFFF",
+    "cornerRadius": 3,
+    "stroke": "#DCDCDC",
+    "strokeWeight": 1,
+    "layout": {
+     "mode": "horizontal"
+    },
+    "crossAlign": "center",
+    "padding": [
+     0,
+     12,
+     0,
+     12
+    ]
+   }
+  }
+ },
+ {
+  "command": "node.create",
+  "params": {
+   "type": "text",
+   "parent": {
+    "$step": 74
+   },
+   "text": "请输入内容",
+   "props": {
+    "fontFamily": "Hiragino Sans GB",
+    "fontSize": 14,
+    "fill": "#8A8A8A"
+   }
+  }
+ },
+ {
+  "command": "style.apply",
+  "params": {
+   "ids": [
+    {
+     "$step": 75
+    }
+   ],
+   "style": "TD/Body M"
+  }
+ },
+ {
+  "command": "component.create",
+  "params": {
+   "ids": [
+    {
+     "$step": 74
+    }
+   ]
+  }
+ },
+ {
+  "command": "page.rename",
+  "params": {
+   "id": 1,
+   "name": "TDesign Kit"
+  }
+ },
+ {
+  "command": "library.publish",
+  "params": {}
+ }
+]

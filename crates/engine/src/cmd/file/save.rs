@@ -55,6 +55,8 @@ pub struct FileSnapshot {
     page: NodeId,
     versions: Vec<Version>,
     branches: Vec<figcraft_format::Branch>,
+    /// The Agent transcript at snapshot time: it is a second archive member, not document content.
+    agent: figcraft_format::agent::AgentData,
 }
 
 impl FileSnapshot {
@@ -68,6 +70,7 @@ impl FileSnapshot {
             page: ds.page,
             versions: ds.versions.clone(),
             branches: ds.branches.clone(),
+            agent: ds.agent().clone(),
         }
     }
 
@@ -76,8 +79,10 @@ impl FileSnapshot {
         let mut doc = (*self.doc).clone();
         doc.current_page = Some(self.page);
         let thumb = thumbnail(&doc);
-        figcraft_format::save_bytes_with_history(&doc, thumb.as_deref(), &self.versions, &self.branches)
-            .map_err(|e| EngineError::Other(e.to_string()))
+        // The transcript travels in the same archive. It is `None` when empty, so a file that never
+        // held a conversation has no member at all.
+        let agent = if self.agent.is_empty() { None } else { Some(&self.agent) };
+        figcraft_format::save_bytes_full(&doc, thumb.as_deref(), &self.versions, &self.branches, agent).map_err(|e| EngineError::Other(e.to_string()))
     }
 
     /// Write `bytes` (this snapshot's [`encode`](Self::encode)) to the document's file: it is saved
@@ -95,6 +100,9 @@ impl FileSnapshot {
         // The history or branches may have changed since: then they still count as unsaved.
         if ds.revision == self.revision {
             ds.versions_changed = false;
+            // A successful save is the moment the transcript on disk matches the one in memory. A
+            // failed save returns earlier and changes neither baseline.
+            ds.mark_agent_saved();
         }
         ds.saved_doc = self.doc;
         ds.revision += 1;

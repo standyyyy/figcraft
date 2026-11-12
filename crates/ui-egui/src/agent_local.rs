@@ -1,0 +1,211 @@
+//! The browser Agent host: one local future per turn instead of a worker thread.
+//!
+//! A page has one thread, so it cannot park it waiting for a provider the way the desktop worker
+//! does. The same [`TurnDriver`](figcraft_agent::runtime::TurnDriver) is advanced by a future
+//! instead: each step awaits the next stream item, which yields to the browser's event loop, and the
+//! panel drains the events it produced when the frame draws.
+//!
+//! The contract is identical to the desktop host's, so a turn behaves the same on either: the
+//! shadow, the typed terminal, the "only a success carries a replay" rule, and the single
+//! `command.batch` the UI thread applies are all the same code.
+//!
+//! Compiles only for the browser: it needs `spawn_local`, which has no meaning on a native build.
+
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use figcraft_agent::run::{AgentEvent, CancelToken};
+use figcraft_agent::{TurnTerminal, runtime::TurnDriver};
+
+use crate::agent_host::{AgentHost, HostMessage, HostRequest, HostStatus, Snapshot, TurnRequest};
+
+/// Shared state between the future and the host: the future runs on the page's loop, so it cannot be
+/// borrowed across an await.
+#[derive(Default)]
+struct Shared {
+    /// The one queue the future fills and the UI drains, in order: progress then its terminal.
+    queue: std::collections::VecDeque<HostMessage>,
+    /// Whether a turn is running. Cleared when the terminal is *drained*, not when produced.
+    running: bool,
+    /// The egui context to wake whenever a message is queued.
+    ///
+    /// A page repaints only on input otherwise, so a turn that streams while nobody touches the page
+    /// would show nothing until the next click or key.
+    wake: Option<egui::Context>,
+}
+
+/// Queue `message` and wake the page.
+fn push(shared: &Rc<RefCell<Shared>>, message: HostMessage) {
+    let wake = match shared.try_borrow_mut() {
+        Ok(mut s) => {
+            s.queue.push_back(message);
+            s.wake.clone()
+        }
+        // A borrow in progress means the UI is draining; the message waits for the next step.
+        Err(_) => None,
+    };
+    if let Some(ctx) = wake {
+        ctx.request_repaint();
+    }
+}
+
+/// Runs turns on the browser's event loop.
+pub struct LocalFutureHost {
+    shared: Rc<RefCell<Shared>>,
+    cancel: Option<CancelToken>,
+    /// Where the session key lives: this store, and nowhere else.
+    credentials: crate::agent_credentials::SessionResolver,
+}
+
+impl LocalFutureHost {
+    /// A host with no turn running, resolving keys through `credentials`.
+    pub fn new(credentials: crate::agent_credentials::SessionResolver) -> Self {
+        Self { shared: Rc::new(RefCell::new(Shared::default())), cancel: None, credentials }
+    }
+}
+
+impl AgentHost for LocalFutureHost {
+    fn start(&mut self, request: HostRequest) -> CancelToken {
+        match request {
+            HostRequest::Cancel => {
+                if let Some(c) = self.cancel.take() {
+                    c.cancel();
+                }
+                // The future sees the token and ends as cancelled on its next step.
+                CancelToken::new()
+            }
+            HostRequest::Start(req) => {
+                let cancel = CancelToken::new();
+                let orchestrator = Orchestrator::from_request(*req, cancel.clone(), &self.credentials);
+                self.cancel = Some(cancel.clone());
+                if let Ok(mut shared) = self.shared.try_borrow_mut() {
+                    shared.running = true;
+                    shared.queue.clear();
+                }
+                let shared = Rc::clone(&self.shared);
+                // A local future: it awaits the provider through the browser's fetch and yields to the
+                // event loop between items, so the page stays responsive.
+                wasm_bindgen_futures::spawn_local(async move {
+                    orchestrator.run(shared).await;
+                });
+                cancel
+            }
+        }
+    }
+
+    fn drain(&mut self) -> Vec<HostMessage> {
+        match self.shared.try_borrow_mut() {
+            Ok(mut shared) => {
+                let messages: Vec<HostMessage> = shared.queue.drain(..).collect();
+                // The turn is over once its ending has been drained; until then it is still theirs to
+                // settle, and a second start would race that.
+                if messages.iter().any(HostMessage::is_terminal) {
+                    shared.running = false;
+                }
+                messages
+            }
+            Err(_) => Vec::new(),
+        }
+    }
+
+    fn status(&self) -> HostStatus {
+        match self.shared.try_borrow() {
+            Ok(s) if s.running => HostStatus::Running,
+            _ => HostStatus::Idle,
+        }
+    }
+
+    fn start_connection_test(&mut self, request: u64, config: figcraft_agent::AgentConfig) -> CancelToken {
+        // A local future on the page's event loop, like a turn: awaiting a provider inside the draw
+        // would freeze the window, and a page has only the one thread.
+        let cancel = CancelToken::new();
+        let token = cancel.clone();
+        let shared = Rc::clone(&self.shared);
+        let credentials = self.credentials.clone();
+        let wake = shared.try_borrow().ok().and_then(|s| s.wake.clone());
+        wasm_bindgen_futures::spawn_local(async move {
+            let status = figcraft_agent::runtime::test_connection_async_cancellable(&config, &credentials, &token).await;
+            push(&shared, HostMessage::ConnectionFinished { request, status });
+            if let Some(ctx) = wake {
+                ctx.request_repaint();
+            }
+        });
+        cancel
+    }
+
+    /// Keep the app's context, so a queued message repaints without waiting for input.
+    fn set_wake(&mut self, ctx: egui::Context) {
+        if let Ok(mut s) = self.shared.try_borrow_mut() {
+            s.wake = Some(ctx);
+        }
+    }
+
+    fn describe(&self) -> String {
+        "browser local future".to_string()
+    }
+}
+
+/// One turn's future.
+struct Orchestrator {
+    driver: TurnDriver,
+}
+
+impl Orchestrator {
+    /// Build the driver for a request: a shadow from the snapshot, then the turn.
+    fn from_request(req: TurnRequest, _cancel: CancelToken, credentials: &crate::agent_credentials::SessionResolver) -> Self {
+        // The snapshot is the document as JSON: the driver's tools run against a shadow built from it,
+        // never against the live document, which the UI thread owns.
+        Self { driver: build_driver(req, credentials) }
+    }
+
+    /// Drive the turn to its end, handing events over as they are produced.
+    async fn run(mut self, shared: Rc<RefCell<Shared>>) {
+        loop {
+            for event in self.driver.take_events() {
+                push(&shared, HostMessage::Progress(event));
+            }
+            if self.driver.is_done() {
+                break;
+            }
+            let more = self.driver.drive_once_async().await;
+            // One item per step, then let the page breathe: the browser must not be starved of
+            // frames while a long turn streams.
+            if !more && self.driver.is_done() {
+                break;
+            }
+        }
+        for event in self.driver.take_events() {
+            push(&shared, HostMessage::Progress(event));
+        }
+        // Progress first, then exactly one terminal, in one queue: the ending is the last message of
+        // its turn by construction.
+        push(&shared, HostMessage::Terminal(self.driver.finish()));
+    }
+}
+
+/// Build the driver for `req`, resolving keys through this browser's session store.
+///
+/// The construction itself is target-independent and lives in [`crate::agent_driver`], so native CI
+/// compiles and tests it; only scheduling a turn on the page's event loop is browser-specific.
+fn build_driver(req: TurnRequest, credentials: &crate::agent_credentials::SessionResolver) -> TurnDriver {
+    crate::agent_driver::build_driver_with_credentials(req, credentials)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_host_with_no_turn_is_idle_and_says_what_it_is() {
+        let host = LocalFutureHost::new(crate::agent_credentials::AgentCredentials::default().resolver());
+        assert_eq!(host.status(), HostStatus::Idle);
+        assert_eq!(host.describe(), "browser local future");
+    }
+
+    #[test]
+    fn draining_an_idle_host_reports_nothing() {
+        let mut host = LocalFutureHost::new(crate::agent_credentials::AgentCredentials::default().resolver());
+        assert!(host.drain().is_empty());
+        assert!(host.take_terminal().is_none());
+    }
+}

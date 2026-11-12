@@ -114,6 +114,8 @@ pub static MENU: &[MenuItem] = &[
     m!("View/Panels", "Reset panel widths", "view.panelWidths"),
     m!("View/Panels", "Layers", "view.layers"),
     m!("View/Panels", "Assets", "view.assets"),
+    // The documents the Agent writes: reachable without opening the Agent and hunting for a tab.
+    m!("View/Panels", "Requirements", "view.requirements"),
     m!("View/Panels", "Design", "view.design"),
     m!("View/Panels", "Prototype", "view.prototype"),
     m!("View", SEP, ""),

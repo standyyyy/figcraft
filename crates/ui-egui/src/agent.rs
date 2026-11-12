@@ -2077,7 +2077,7 @@ const REQ_LIST_W: f32 = 220.0;
 /// not fit a sidebar, and a column of text boxes gives no way to see which part is which -- so the
 /// window reads first, and the form is a mode.
 pub fn requirements_window(app: &mut crate::FigApp, ctx: &egui::Context) {
-    let Some(mut st) = app.ui.agent.take() else { return };
+    let Some(st) = app.ui.agent.take() else { return };
     if !st.window_open {
         app.ui.agent = Some(st);
         return;

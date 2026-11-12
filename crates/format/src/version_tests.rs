@@ -166,6 +166,7 @@ fn a_file_with_requirements_round_trips() {
         detail: "Prefill from the last order.".into(),
         priority: Priority::Must,
         acceptance_criteria: vec!["It appears on return.".into()],
+        ..Default::default()
     });
     d.requirements.push(prd);
 

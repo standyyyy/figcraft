@@ -1852,7 +1852,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-agent"
-version = "0.15.0"
+version = "0.17.0"
 dependencies = [
  "figcraft-agent-tools",
  "figcraft-doc",
@@ -1871,7 +1871,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-agent-tools"
-version = "0.15.0"
+version = "0.17.0"
 dependencies = [
  "base64 0.22.1",
  "figcraft-doc",

@@ -43,7 +43,7 @@ TDesign 官网 <https://tdesign.tencent.com/icons> 是单页应用，数据靠 J
 
 ```bash
 # 这才是纯 SVG 图标包（不是 tdesign-icons-vue-next，那个是 Vue 组件）
-curl -x http://192.168.0.1:7890 -O \
+curl -x http://127.0.0.1:7890 -O \
   https://registry.npmjs.org/tdesign-icons-svg/-/tdesign-icons-svg-0.4.8.tgz
 tar xzf tdesign-icons-svg-0.4.8.tgz
 ls package/src/*.svg | wc -l     # 2358
@@ -174,7 +174,7 @@ mkdir -p mpages
 # 逐页拉，每次请求之间 sleep 1，避免触发 burst
 jq -r '.[] | select(.name | test("Welcome|Changelog|---") | not) | .id' mpages.json | while read pid; do
   enc=$(echo "$pid" | sed 's/:/%3A/')
-  curl -sS -m 180 -x http://192.168.0.1:7890 \
+  curl -sS -m 180 -x http://127.0.0.1:7890 \
     -H "X-Figma-Token: $FIGMA_TOKEN" \
     "https://api.figma.com/v1/files/$KEY/nodes?ids=$enc&geometry=paths" \
     -o "mpages/$(echo $pid | tr ':' '_').json"

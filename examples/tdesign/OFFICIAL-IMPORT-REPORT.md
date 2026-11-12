@@ -169,7 +169,7 @@ PingFang 在这台机器上确实存在，但在 Apple 的保留字体路径：
 
 ```bash
 # 1. 拉取（用代理会快 60 倍：直连 15 分钟没下完，代理 9 秒）
-curl -x http://192.168.0.1:7890 \
+curl -x http://127.0.0.1:7890 \
   -H "X-Figma-Token: $FIGMA_TOKEN" \
   "https://api.figma.com/v1/files/OB67WPJtsgZgOX8DsuaBGw?geometry=paths" \
   -o tdesign-full.json

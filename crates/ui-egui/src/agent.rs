@@ -2082,7 +2082,12 @@ pub fn requirements_window(app: &mut crate::FigApp, ctx: &egui::Context) {
         app.ui.agent = Some(st);
         return;
     }
+    // Put the panel back before reading the session: `panel_input` looks up the open document through
+    // `app.ui.agent`, and while the panel is taken it finds nothing -- which left the reading form with
+    // no document and a blank window.
+    app.ui.agent = Some(st);
     let input = panel_input(app);
+    let Some(mut st) = app.ui.agent.take() else { return };
     let t = Tokens::get(ctx);
     let screen = ctx.content_rect();
     let size = vec2(1040.0_f32.min(screen.width() - 80.0).max(560.0), 720.0_f32.min(screen.height() - 80.0).max(400.0));

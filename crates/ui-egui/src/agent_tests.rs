@@ -1389,3 +1389,35 @@ fn a_requirement_card_expands_and_collapses() {
     assert!(panel.expanded.is_none());
     app.ui.agent = Some(panel);
 }
+
+#[test]
+fn the_open_document_reaches_the_reading_form() {
+    // The window was blank because `panel_input` looks the open document up through `app.ui.agent`,
+    // and the window had taken the panel before asking -- so it found nothing every frame. This pins
+    // the load: with a document open, the input carries it in full.
+    let mut app = harness_with(true);
+    app.session
+        .execute("requirements.upsert", &serde_json::json!({"title": "PRD", "requirements": [{"title": "a", "detail": "d"}]}))
+        .expect("create");
+    let panel = app.ui.agent.as_mut().expect("panel");
+    panel.editing = Some("PRD:1".into());
+    panel.window_open = true;
+
+    let input = crate::agent::panel_input(&mut app);
+    let doc = input.requirements.open_document.as_ref().expect("the open document is loaded");
+    assert_eq!(doc.id, "PRD:1");
+    assert_eq!(doc.title, "PRD");
+    assert_eq!(doc.requirements.len(), 1, "with its requirements, not just counts");
+}
+
+#[test]
+fn no_document_open_means_no_document_in_the_input() {
+    // The other half: nothing open must stay nothing, so the window shows the empty state rather than
+    // the last document it happened to see.
+    let mut app = harness_with(true);
+    app.session.execute("requirements.upsert", &serde_json::json!({"title": "PRD"})).expect("create");
+    let panel = app.ui.agent.as_mut().expect("panel");
+    panel.editing = None;
+    let input = crate::agent::panel_input(&mut app);
+    assert!(input.requirements.open_document.is_none());
+}
